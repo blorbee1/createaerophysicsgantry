@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "com.blorbee.createaerophysicsgantry.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "refmap": "createaerophysicsgantry.refmap.json",
+  "mixins": [
+    "PlaceMergingGluePacketMixin",
+    "MergingGlueItemHandlerMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

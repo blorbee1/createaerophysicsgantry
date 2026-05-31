@@ -1,0 +1,6 @@
+{
+  "selector": "createaerophysicsgantry:physics_gantry_shaft",
+  "properties": {
+    "sable:mass": 0.5
+  }
+}

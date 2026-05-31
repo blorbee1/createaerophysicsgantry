@@ -1,0 +1,18 @@
+{
+  "createaerophysicsgantry.belt_wheel.link_first": "Belt wheel selected. Right-click another belt wheel with the belt connector to link.",
+  "createaerophysicsgantry.belt_wheel.link_cleared": "Belt wheel selection cleared.",
+  "createaerophysicsgantry.belt_wheel.link_missing": "The selected belt wheel is no longer available.",
+  "createaerophysicsgantry.belt_wheel.link_self": "Cannot link a belt wheel to itself.",
+  "createaerophysicsgantry.belt_wheel.axis_mismatch": "Belt wheels must share the same rotation axis.",
+  "createaerophysicsgantry.belt_wheel.distance_invalid": "Belt wheel distance is out of range (max 64 blocks).",
+  "createaerophysicsgantry.belt_wheel.not_straight": "Belt wheels must be in a straight line.",
+  "createaerophysicsgantry.belt_wheel.link_success": "Belt wheel link created.",
+  "createaerophysicsgantry.belt_wheel.link_broken": "Belt wheel link severed.",
+  "createaerophysicsgantry.belt_wheel.status_unlinked": "Belt Wheel: Unlinked",
+  "createaerophysicsgantry.belt_wheel.status_missing": "Belt Wheel: Linked endpoint missing",
+  "createaerophysicsgantry.belt_wheel.status_linked": "Belt Wheel: %1$s, %2$s, distance %3$s",
+  "createaerophysicsgantry.belt_wheel.role_driver": "Driver",
+  "createaerophysicsgantry.belt_wheel.role_receiver": "Receiver",
+  "createaerophysicsgantry.belt_wheel.direction_out": "outbound",
+  "createaerophysicsgantry.belt_wheel.direction_in": "inbound"
+}

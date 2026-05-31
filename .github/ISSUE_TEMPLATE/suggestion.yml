@@ -1,0 +1,13 @@
+name: I have a suggestion!
+description: Suggest a new, change, or a removal of a feature
+labels: [ "enhancement" ]
+body:
+  - type: textarea
+    attributes:
+      label: Suggestion
+      description: >
+        Please describe your suggestion with as much detail as possible.
+        The better the description, the better it can be implemented.
+        Not all suggestions will be implemented.
+    validations:
+      required: true

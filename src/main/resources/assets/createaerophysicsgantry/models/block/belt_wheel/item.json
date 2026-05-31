@@ -1,0 +1,10 @@
+{
+  "render_type": "minecraft:cutout",
+  "parent": "create:block/encased_cogwheel/item",
+  "textures": {
+    "1": "createaerophysicsgantry:block/belt_wheel/inside",
+    "casing": "create:block/railway_casing",
+    "particle": "create:block/railway_casing",
+    "side": "createaerophysicsgantry:block/belt_wheel/side"
+  }
+}
