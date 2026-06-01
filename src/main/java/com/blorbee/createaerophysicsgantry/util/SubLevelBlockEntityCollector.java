@@ -29,24 +29,21 @@ public final class SubLevelBlockEntityCollector {
         if (subLevel == null)
             return List.of();
 
-        try {
-            LevelPlot plot = subLevel.getPlot();
-            collectActorBlockEntities(plot, blockEntities);
+        LevelPlot plot = subLevel.getPlot();
+        collectActorBlockEntities(plot, blockEntities);
 
-            Collection<PlotChunkHolder> loadedChunks = plot.getLoadedChunks();
-            if (loadedChunks == null)
-                return new ArrayList<>(blockEntities.values());
-
-            for (PlotChunkHolder chunkHolder : loadedChunks) {
-                LevelChunk chunk = chunkHolder.getChunk();
-                Map<BlockPos, BlockEntity> blockEntityMap = chunk.getBlockEntities();
-                for (BlockEntity blockEntity : blockEntityMap.values()) {
-                    blockEntities.putIfAbsent(blockEntity.getBlockPos().immutable(), blockEntity);
-                }
-            }
-        } catch (Exception ignored) {
+        Collection<PlotChunkHolder> loadedChunks = plot.getLoadedChunks();
+        if (loadedChunks == null)
             return new ArrayList<>(blockEntities.values());
+
+        for (PlotChunkHolder chunkHolder : loadedChunks) {
+            LevelChunk chunk = chunkHolder.getChunk();
+            Map<BlockPos, BlockEntity> blockEntityMap = chunk.getBlockEntities();
+            for (BlockEntity blockEntity : blockEntityMap.values()) {
+                blockEntities.putIfAbsent(blockEntity.getBlockPos().immutable(), blockEntity);
+            }
         }
+
         return new ArrayList<>(blockEntities.values());
     }
 

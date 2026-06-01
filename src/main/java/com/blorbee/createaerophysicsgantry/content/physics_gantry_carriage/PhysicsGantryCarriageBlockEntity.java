@@ -313,20 +313,15 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 if (shaftConstraintHandle != null)
                     clearShaftConstraint();
 
-                try {
-                    FixedConstraintConfiguration fixedConstraint = new FixedConstraintConfiguration(targetPosition, rotationPoint, orientation);
-                    ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
-                    if (container == null)
-                        return;
+                FixedConstraintConfiguration fixedConstraint = new FixedConstraintConfiguration(targetPosition, rotationPoint, orientation);
+                ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
+                if (container == null)
+                    return;
 
-                    SubLevelPhysicsSystem physicsSystem = container.physicsSystem();
-                    PhysicsPipeline pipeline = physicsSystem.getPipeline();
-                    shaftConstraintHandle = pipeline.addConstraint(null, (ServerSubLevel) constrainedSubLevel, fixedConstraint);
-                    shaftConstraintWorldAnchor = worldAnchor;
-                } catch (Exception e) {
-                    LOGGER.warn("[PhysicsGantry] constraint creation failed at {}: {}", worldPosition, e.toString());
-                    clearShaftConstraint();
-                }
+                SubLevelPhysicsSystem physicsSystem = container.physicsSystem();
+                PhysicsPipeline pipeline = physicsSystem.getPipeline();
+                shaftConstraintHandle = pipeline.addConstraint(null, (ServerSubLevel) constrainedSubLevel, fixedConstraint);
+                shaftConstraintWorldAnchor = worldAnchor;
             }
         }
     }
@@ -847,14 +842,12 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         if (subLevel == null)
             return false;
 
-        try {
-            for (BlockEntity be : SubLevelBlockEntityCollector.getBlockEntities(subLevel)) {
-                if (be instanceof DockingConnectorBlockEntity connector) {
-                    if (connector.isLocked())
-                        return true;
-                }
+        for (BlockEntity be : SubLevelBlockEntityCollector.getBlockEntities(subLevel)) {
+            if (be instanceof DockingConnectorBlockEntity connector) {
+                if (connector.isLocked())
+                    return true;
             }
-        } catch (Exception ignored) {}
+        }
 
         return false;
     }
@@ -1385,18 +1378,14 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
     private void teleportSubLevel(SubLevel subLevel, Vector3dc position, Quaterniondc orientation) {
         if (subLevel != null && position != null && orientation != null && level != null && level instanceof ServerLevel serverLevel) {
-            try {
-                ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
-                if (container == null)
-                    return;
+            ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
+            if (container == null)
+                return;
 
-                SubLevelPhysicsSystem physics = container.physicsSystem();
-                PhysicsPipeline pipeline = physics.getPipeline();
+            SubLevelPhysicsSystem physics = container.physicsSystem();
+            PhysicsPipeline pipeline = physics.getPipeline();
 
-                pipeline.teleport((PhysicsPipelineBody) subLevel, position, orientation);
-            } catch (Exception e) {
-                LOGGER.warn("[PhysicsGantry] teleport failed at {}: {}", worldPosition, e.toString());
-            }
+            pipeline.teleport((PhysicsPipelineBody) subLevel, position, orientation);
         }
     }
 
@@ -1512,16 +1501,14 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
     private void resetSubLevelVelocity(SubLevel subLevel) {
         if (subLevel != null && level != null && level instanceof ServerLevel serverLevel) {
-            try {
-                ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
-                if (container == null)
-                    return;
+            ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
+            if (container == null)
+                return;
 
-                SubLevelPhysicsSystem physics = container.physicsSystem();
-                PhysicsPipeline pipeline = physics.getPipeline();
+            SubLevelPhysicsSystem physics = container.physicsSystem();
+            PhysicsPipeline pipeline = physics.getPipeline();
 
-                pipeline.resetVelocity((PhysicsPipelineBody) subLevel);
-            } catch (Exception ignored) {}
+            pipeline.resetVelocity((PhysicsPipelineBody) subLevel);
         }
     }
 

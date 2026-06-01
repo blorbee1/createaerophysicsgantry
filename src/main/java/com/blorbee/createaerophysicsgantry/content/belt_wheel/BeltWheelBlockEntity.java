@@ -423,18 +423,16 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
             return found;
 
         UUID ourSubLevel = SimulatedHelper.getContainingSubLevelId(this);
-        try {
-            SubLevelContainer container = SubLevelContainer.getContainer(level);
-            if (container != null) {
-                for (SubLevel subLevel : container.getAllSubLevels()) {
-                    for (BlockEntity be : SubLevelBlockEntityCollector.getBlockEntities(subLevel)) {
-                        if (be instanceof BeltWheelBlockEntity wheel && wheel.references(worldPosition, ourSubLevel)) {
-                            return wheel;
-                        }
+        SubLevelContainer container = SubLevelContainer.getContainer(level);
+        if (container != null) {
+            for (SubLevel subLevel : container.getAllSubLevels()) {
+                for (BlockEntity be : SubLevelBlockEntityCollector.getBlockEntities(subLevel)) {
+                    if (be instanceof BeltWheelBlockEntity wheel && wheel.references(worldPosition, ourSubLevel)) {
+                        return wheel;
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        }
 
         return null;
     }
