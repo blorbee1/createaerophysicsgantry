@@ -127,6 +127,7 @@ public class BeltWheelScenes {
         scene.overlay().showText(50)
             .text("You cannot connect two Belt Wheels that do not have the same rotation axis")
             .attachKeyFrame()
+            .colored(PonderPalette.RED)
             .placeNearTarget()
             .pointAt(util.vector().centerOf(beltWheelMisalignedA));
 
@@ -142,6 +143,7 @@ public class BeltWheelScenes {
         scene.overlay().showText(50)
             .text("They also must be aligned in order to connect them")
             .attachKeyFrame()
+            .colored(PonderPalette.RED)
             .placeNearTarget()
             .pointAt(util.vector().centerOf(beltWheelMisalignedB));
 

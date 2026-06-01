@@ -193,7 +193,6 @@ public class PhysicsGantryScenes {
         Vec3 halfwayEndPos = util.vector().of(1.5, 2, 1.5);
         scene.overlay().showText(80)
             .attachKeyFrame()
-            .colored(PonderPalette.RED)
             .pointAt(halfwayEndPos)
             .text("Because Physics Gantry Carriages are Simulated Contraptions, they will not disassemble when stopping between blocks.")
             .placeNearTarget();
