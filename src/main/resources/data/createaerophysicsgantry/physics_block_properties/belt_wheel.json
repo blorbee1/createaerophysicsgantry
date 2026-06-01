@@ -1,6 +1,6 @@
 {
   "selector": "createaerophysicsgantry:belt_wheel",
   "properties": {
-    "sable:mass": 0.6
+    "sable:mass": 2.0
   }
 }
