@@ -338,14 +338,9 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         other.linkValidated = true;
     }
 
-    private static final Logger LOGGER = LogUtils.getLogger();
     private boolean wouldCreateKineticLoop(BeltWheelBlockEntity other) {
         if (other == null)
             return false;
-
-        LOGGER.debug("[BELT LOOP] start check this={} other={} thisNet={} otherNet={}",
-            endpointKey(this), endpointKey(other),
-            network, other.network);
 
         if (isInSameKineticNetwork(other))
             return true;
@@ -364,10 +359,6 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
 
         while (!queue.isEmpty()) {
             BeltWheelBlockEntity current = queue.poll();
-
-            LOGGER.debug("[BELT LOOP] visiting current={} currentNet={} speed={} receivesFromLinked={}",
-                endpointKey(current),
-                current.network, current.getSpeed(), current.receivesFromLinkedWheel);
 
             if (isInSameKineticNetwork(current))
                 return true;
