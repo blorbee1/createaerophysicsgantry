@@ -12,6 +12,7 @@ import net.createmod.ponder.api.scene.SceneBuildingUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
 
 public class BeltWheelScenes {
@@ -93,14 +94,30 @@ public class BeltWheelScenes {
         scene.overlay().showOutline(PonderPalette.OUTPUT, "plank_outline", util.select().position(plank), 60);
         scene.idle(70);
 
+        scene.world().hideSection(util.select().position(plank), Direction.UP);
+        scene.idle(25);
+
+        scene.overlay().showText(60)
+            .text("You can unlink two belt wheels with Shears on either Belt Wheel")
+            .attachKeyFrame()
+            .placeNearTarget()
+            .pointAt(util.vector().centerOf(beltWheelMainB));
+        scene.idle(70);
+
+        scene.overlay().showControls(util.vector().topOf(beltWheelMainB), Pointing.DOWN, 25).rightClick()
+            .withItem(Items.SHEARS.getDefaultInstance());
+        scene.overlay().showOutline(PonderPalette.GREEN, "belt_b_outline", util.select().position(beltWheelMainB), 25);
+        scene.idle(20);
+
         scene.world().modifyBlockEntity(beltWheelMainA, BeltWheelBlockEntity.class,
             b -> b.breakLink(false));
         scene.world().modifyBlockEntity(beltWheelMainB, BeltWheelBlockEntity.class,
             b -> b.breakLink(false));
 
+        scene.idle(30);
+
         scene.world().hideSection(util.select().position(beltWheelMainA), Direction.UP);
         scene.world().hideSection(util.select().position(beltWheelMainB), Direction.UP);
-        scene.world().hideSection(util.select().position(plank), Direction.UP);
         scene.idle(10);
 
         scene.world().showSection(util.select().position(beltWheelVertical), Direction.DOWN);
