@@ -13,6 +13,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
@@ -166,6 +168,9 @@ public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<Bel
 
             firstWheel.setLinkedTarget(clickedWheel.getBlockPos(), clickedSubLevel);
             clickedWheel.setLinkedTarget(firstWheel.getBlockPos(), firstSubLevel);
+
+            level.playSound(null, clickedWheel.getBlockPos(), SoundEvents.WOOL_PLACE, SoundSource.BLOCKS, 1.0F, 1.0F);
+            level.playSound(null, firstWheel.getBlockPos(), SoundEvents.WOOL_PLACE, SoundSource.BLOCKS, 1.0F, 1.0F);
 
             if (!player.getAbilities().instabuild) {
                 stack.shrink(1);

@@ -2,24 +2,44 @@ package com.blorbee.createaerophysicsgantry.content.belt_wheel;
 
 import com.blorbee.createaerophysicsgantry.compat.simulated.SimulatedHelper;
 import com.blorbee.createaerophysicsgantry.util.SubLevelBlockEntityCollector;
+import com.mojang.logging.LogUtils;
+import com.simibubi.create.AllBlocks;
 import com.simibubi.create.content.kinetics.base.GeneratingKineticBlockEntity;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.particles.BlockParticleOption;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import org.slf4j.Logger;
 
 import javax.annotation.Nullable;
-import java.util.List;
-import java.util.Objects;
-import java.util.UUID;
+import java.util.*;
 
 public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
+    private static final Map<Level, Set<BeltWheelBlockEntity>> INDEXED_WHEELS = new WeakHashMap<>();
+
+    private static void indexWheel(BeltWheelBlockEntity be) {
+        INDEXED_WHEELS.computeIfAbsent(be.level, b -> Collections.newSetFromMap(new WeakHashMap<>()))
+            .add(be);
+    }
+
+    private static void unindexWheel(BeltWheelBlockEntity be) {
+        Set<BeltWheelBlockEntity> set = INDEXED_WHEELS.get(be.level);
+        if (set != null)
+            set.remove(be);
+    }
+
     @Nullable
     private BlockPos linkedPos;
     @Nullable
@@ -38,8 +58,15 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
     private float reportedDriverCapacity = 0.0F;
     private boolean sharedOverstressed = false;
 
+    private Long lastKnownNetwork;
+
     public BeltWheelBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
+    }
+
+    @Override
+    public void updateFromNetwork(float maxStress, float currentStress, int networkSize) {
+        super.updateFromNetwork(maxStress, currentStress, networkSize);
     }
 
     @Override
@@ -51,6 +78,13 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         boolean currentSourceState = isSource();
         boolean sourceChanged = currentSourceState != lastKnownSourceState;
         lastKnownSourceState = currentSourceState;
+
+        boolean kineticNetworkChanged = false;
+        Long currentNetwork = hasNetwork() ? network : null;
+        if (!Objects.equals(currentNetwork, lastKnownNetwork)) {
+            lastKnownNetwork = currentNetwork;
+            kineticNetworkChanged = true;
+        }
 
         if (sourceChanged) {
             updateGeneratedRotation();
@@ -66,6 +100,11 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
 
             BeltWheelBlockEntity linked = resolveLinkedWheel();
             if (linked != null) {
+                if (kineticNetworkChanged && wouldCreateKineticLoop(linked)) {
+                    breakLink(true);
+                    return;
+                }
+
                 if (!receivesFromLinkedWheel) {
                     boolean newState = overStressed || linked.overStressed;
                     if (sharedOverstressed != newState) {
@@ -240,6 +279,7 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         linkedSubLevelId = targetSubLevelId;
         receivesFromLinkedWheel = false;
         generatedLinkSpeed = 0.0F;
+        linkValidated = false;
 
         updateGeneratedRotation();
         setChanged();
@@ -254,11 +294,18 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         if (!hasLinkedTarget())
             return;
 
+        Vec3 start = getWorldAnchorPosition();
+        Vec3 end = getLinkedWorldAnchorPosition();
+
         if (notifyOther && level != null && linkedPos != null) {
             BeltWheelBlockEntity other = resolveLinkedWheel();
             if (other != null && !other.isRemoved()) {
                 other.breakLink(false);
             }
+        }
+
+        if (level instanceof ServerLevel serverLevel && start != null && end != null) {
+            playBeltBreakEffects(serverLevel, start, end);
         }
 
         linkedPos = null;
@@ -282,8 +329,87 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         if (!other.hasLinkedTarget())
             return;
 
+        if (wouldCreateKineticLoop(other)) {
+            breakLink(true);
+            return;
+        }
+
         linkValidated = true;
         other.linkValidated = true;
+    }
+
+    private static final Logger LOGGER = LogUtils.getLogger();
+    private boolean wouldCreateKineticLoop(BeltWheelBlockEntity other) {
+        if (other == null)
+            return false;
+
+        LOGGER.debug("[BELT LOOP] start check this={} other={} thisNet={} otherNet={}",
+            endpointKey(this), endpointKey(other),
+            network, other.network);
+
+        if (isInSameKineticNetwork(other))
+            return true;
+
+        // check if other's network contains any wheel that links back to our network
+        Set<Long> visitedNetworks = new HashSet<>();
+        Set<BeltWheelBlockEntity> visitedWheels = new HashSet<>();
+        Queue<BeltWheelBlockEntity> queue = new LinkedList<>();
+
+        visitedWheels.add(this);
+        if (hasNetwork())
+            visitedNetworks.add(network);
+
+        queue.add(other);
+        visitedWheels.add(other);
+
+        while (!queue.isEmpty()) {
+            BeltWheelBlockEntity current = queue.poll();
+
+            LOGGER.debug("[BELT LOOP] visiting current={} currentNet={} speed={} receivesFromLinked={}",
+                endpointKey(current),
+                current.network, current.getSpeed(), current.receivesFromLinkedWheel);
+
+            if (isInSameKineticNetwork(current))
+                return true;
+
+            if (current.hasNetwork() && visitedNetworks.add(current.network)) {
+                for (BeltWheelBlockEntity wheel : getAllKnownBeltWheels()) {
+                    if (visitedWheels.contains(wheel))
+                        continue;
+                    if (wheel.hasNetwork() && Objects.equals(wheel.network, current.network)) {
+                        visitedWheels.add(wheel);
+                        queue.add(wheel);
+                    }
+                }
+            }
+
+            BeltWheelBlockEntity linked = current.resolveLinkedWheel();
+            if (linked != null && visitedWheels.add(linked)) {
+                if (isInSameKineticNetwork(linked))
+                    return true;
+                queue.add(linked);
+            }
+        }
+
+        return false;
+    }
+
+    private boolean isInSameKineticNetwork(BeltWheelBlockEntity other) {
+        if (other == null || !hasNetwork() || !other.hasNetwork())
+            return false;
+        return Objects.equals(network, other.network);
+    }
+
+    private Iterable<BeltWheelBlockEntity> getAllKnownBeltWheels() {
+        List<BeltWheelBlockEntity> wheels = new ArrayList<>();
+        if (level == null)
+            return wheels;
+
+        Set<BeltWheelBlockEntity> indexedWheels = INDEXED_WHEELS.get(level);
+        if (indexedWheels != null)
+            wheels.addAll(indexedWheels);
+
+        return wheels;
     }
 
     @Nullable
@@ -391,6 +517,20 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
     }
 
     @Override
+    public void onLoad() {
+        super.onLoad();
+        if (level != null && !level.isClientSide)
+            indexWheel(this);
+    }
+
+    @Override
+    public void remove() {
+        super.remove();
+        if (level != null && !level.isClientSide)
+            unindexWheel(this);
+    }
+
+    @Override
     public boolean addToGoggleTooltip(List<Component> tooltip, boolean isPlayerSneaking) {
         return false;
     }
@@ -429,6 +569,25 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         String subLevel = subLevelId == null ? "world" : subLevelId.toString();
         BlockPos pos = be.getBlockPos();
         return subLevel + ":" + pos.getX() + ":" + pos.getY() + ":" + pos.getZ();
+    }
+
+    private void playBeltBreakEffects(ServerLevel level, Vec3 start, Vec3 end) {
+        BlockState particleState = AllBlocks.BELT.getDefaultState();
+        for (int i = 0; i < 40; i++) {
+            double t = i / 39.0;
+            Vec3 pos = start.lerp(end, t);
+
+            level.sendParticles(
+                new BlockParticleOption(ParticleTypes.BLOCK, particleState),
+                pos.x, pos.y, pos.z,
+                1,
+                0.5, 0.5, 0.5,
+                0.0
+            );
+        }
+
+        level.playSound(null, BlockPos.containing(start), SoundEvents.WOOL_BREAK, SoundSource.BLOCKS, 1.0F, 1.0F);
+        level.playSound(null, BlockPos.containing(end), SoundEvents.WOOL_BREAK, SoundSource.BLOCKS, 1.0F, 1.0F);
     }
 
     private enum TransferDecision {
