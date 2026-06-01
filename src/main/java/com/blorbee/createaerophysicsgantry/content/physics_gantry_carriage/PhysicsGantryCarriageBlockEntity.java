@@ -90,8 +90,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
     private final Vector3d lockedRotationPoint = new Vector3d();
     private boolean hasLockedRotationPoint;
 
-    private UUID debugAnchorEntityId;
-
     private BlockPos pendingManualRelinkShaftPos;
     private Direction pendingManualRelinkShaftDirection;
     private Direction pendingManualRelinkCarriageFacing;
@@ -219,7 +217,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             return false;
 
         clearShaftConstraint();
-        clearDebugAnchorEntity();
         this.assembledToSubLevel = false;
         this.attachedShaftPos = null;
         this.attachedShaftDirection = null;
@@ -396,8 +393,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
                 Vec3 initialAnchor = Vec3.atCenterOf(shaftPos)
                     .add(carriageFacing.getStepX() * 0.5, carriageFacing.getStepY() * 0.5, carriageFacing.getStepZ() * 0.5);
-                active.emitDebugAttachmentParticles(initialAnchor, false);
-                active.updateDebugAnchorEntity(initialAnchor, false);
 
                 LOGGER.info("[PhysicsGantry] assembled pos={} active={} shaft={} dir={} face={}",
                     worldPosition, active.worldPosition, shaftPos, shaftDirection, carriageFacing);
@@ -621,7 +616,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
         BlockPos previousShaftPos = attachedShaftPos;
         clearShaftConstraint();
-        clearDebugAnchorEntity();
         clearPendingManualRelink();
 
         SubLevel subLevel = resolveAttachedSubLevel();
@@ -820,7 +814,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
         if (isSubLevelDockedToExternal(subLevel)) {
             resetSubLevelVelocity(subLevel);
-            applyAttachmentPose(subLevel, true);
+            applyAttachmentPose(subLevel);
             return;
         }
 
@@ -846,7 +840,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             }
         }
 
-        applyAttachmentPose(subLevel, true);
+        applyAttachmentPose(subLevel);
     }
 
     private boolean isSubLevelDockedToExternal(SubLevel subLevel) {
@@ -865,7 +859,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         return false;
     }
 
-    private void applyAttachmentPose(SubLevel subLevel, boolean updateDebugAnchor) {
+    private void applyAttachmentPose(SubLevel subLevel) {
         if (subLevel != null && attachedShaftPos != null && attachedShaftDirection != null && attachedCarriageFacing != null) {
             PhysicsGantryShaftBlockEntity shaftBe = findAttachedShaftEntity(attachedShaftPos, attachedShaftSubLevelId);
             if (shaftBe == null)
@@ -881,10 +875,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 )
                 .add(carriageFacingLocal.x * 0.5, carriageFacingLocal.y * 0.5, carriageFacingLocal.z * 0.5);
             Vec3 worldAnchor = SimulatedHelper.toContainingWorldPosition(shaftBe, localAnchor);
-
-            if (updateDebugAnchor) {
-                updateDebugAnchorEntity(worldAnchor, true);
-            }
             updateShaftConstraintFromGameTick(subLevel, worldAnchor);
         }
     }
@@ -1015,7 +1005,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 BlockPos previousShaftPos = attachedShaftPos;
                 UUID previousSubLevelId = attachedSubLevelId;
                 clearShaftConstraint();
-                clearDebugAnchorEntity();
                 clearPendingManualRelink();
                 assembledToSubLevel = false;
                 attachedShaftPos = null;
@@ -1249,25 +1238,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         orientation.rotateX(Math.toRadians(facing == Direction.UP ? 0.0 : (facing == Direction.DOWN ? 180.0 : 90.0)));
         orientation.rotateY(Math.toRadians(alongFirst ^ facing.getAxis() == Direction.Axis.X ? 0.0 : 90.0));
         return orientation.normalize();
-    }
-
-    private void emitDebugAttachmentParticles(Vec3 worldAnchor, boolean constraintActive) {}
-
-    private void updateDebugAnchorEntity(Vec3 worldAnchor, boolean constraintActive) {
-        clearDebugAnchorEntity();
-    }
-
-    private void clearDebugAnchorEntity() {
-        if (debugAnchorEntityId != null) {
-            ServerLevel serverLevel = resolveServerLevel(level);
-            if (serverLevel != null) {
-                Entity existing = serverLevel.getEntity(debugAnchorEntityId);
-                if (existing != null && !existing.isRemoved()) {
-                    existing.discard();
-                }
-            }
-        }
-        debugAnchorEntityId = null;
     }
 
     private Vec3 toSubLevelLocalAnchor(SubLevel subLevel, Vec3 worldAnchor) {
