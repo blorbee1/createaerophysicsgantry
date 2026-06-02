@@ -89,9 +89,10 @@ public class BeltWheelScenes {
         scene.overlay().showText(60)
             .text("Belt Wheels can link together through blocks")
             .attachKeyFrame()
+            .colored(PonderPalette.GREEN)
             .placeNearTarget()
             .pointAt(util.vector().centerOf(plank));
-        scene.overlay().showOutline(PonderPalette.OUTPUT, "plank_outline", util.select().position(plank), 60);
+        scene.overlay().showOutline(PonderPalette.GREEN, "plank_outline", util.select().position(plank), 60);
         scene.idle(70);
 
         scene.world().hideSection(util.select().position(plank), Direction.UP);
