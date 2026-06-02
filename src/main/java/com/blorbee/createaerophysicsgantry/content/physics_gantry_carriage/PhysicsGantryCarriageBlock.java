@@ -1,6 +1,5 @@
 package com.blorbee.createaerophysicsgantry.content.physics_gantry_carriage;
 
-import com.blorbee.createaerophysicsgantry.CreateAeroPhysicsGantry;
 import com.blorbee.createaerophysicsgantry.content.physics_gantry_shaft.PhysicsGantryShaftBlock;
 import com.blorbee.createaerophysicsgantry.registry.CAPGBlockEntityTypes;
 import com.blorbee.createaerophysicsgantry.registry.CAPGBlocks;
@@ -9,11 +8,8 @@ import com.simibubi.create.foundation.block.IBE;
 import net.createmod.catnip.data.Iterate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
-import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
@@ -33,12 +29,12 @@ public class PhysicsGantryCarriageBlock extends DirectionalAxisKineticBlock impl
         Direction direction = state.getValue(FACING);
         BlockState shaft = world.getBlockState(pos.relative(direction.getOpposite()));
         if (shaft.getBlock() == CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()
-            && shaft.getValue(PhysicsGantryShaftBlock.FACING).getAxis() != direction.getAxis()) {
+            && shaft.getValue(PhysicsGantryShaftBlock.FACING).getAxis() != direction.getAxis()
+        ) {
             return true;
         } else {
             return world instanceof Level level && level.getBlockEntity(pos) instanceof PhysicsGantryCarriageBlockEntity carriageBe
-                ? carriageBe.isSubLevelAssembled()
-                : false;
+                && carriageBe.isSubLevelAssembled();
         }
     }
 
