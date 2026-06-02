@@ -1225,43 +1225,52 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
     }
 
     private Quaterniond resolveShaftFrameOrientation() {
-        if (attachedShaftPos != null && attachedShaftDirection != null && attachedCarriageFacing != null) {
-            PhysicsGantryShaftBlockEntity shaftBe = findAttachedShaftEntity(attachedShaftPos, attachedShaftSubLevelId);
-            if (shaftBe == null)
-                return null;
+        if (attachedShaftPos == null || attachedShaftDirection == null || attachedCarriageFacing == null)
+            return null;
 
-            Vec3 shaftLocal = Vec3.atLowerCornerOf(this.attachedShaftDirection.getNormal());
-            Vec3 carriageLocal = Vec3.atLowerCornerOf(this.attachedCarriageFacing.getNormal());
-            Vec3 shaftWorld = SimulatedHelper.toContainingWorldDirection(shaftBe, shaftLocal);
-            Vec3 carriageWorld = SimulatedHelper.toContainingWorldDirection(shaftBe, carriageLocal);
-            if (shaftWorld != null && carriageWorld != null && !(shaftWorld.lengthSqr() < 1.0E-6) && !(carriageWorld.lengthSqr() < 1.0E-6)) {
-                Vector3d forward = new Vector3d(shaftWorld.x, shaftWorld.y, shaftWorld.z).normalize();
-                Vector3d upHint = new Vector3d(carriageWorld.x, carriageWorld.y, carriageWorld.z).normalize();
+        PhysicsGantryShaftBlockEntity shaftBe = findAttachedShaftEntity(attachedShaftPos, attachedShaftSubLevelId);
+        if (shaftBe == null)
+            return null;
 
-                if (Double.isFinite(forward.x)
-                    && Double.isFinite(forward.y)
-                    && Double.isFinite(forward.z)
-                    && Double.isFinite(upHint.x)
-                    && Double.isFinite(upHint.y)
-                    && Double.isFinite(upHint.z)
-                    && !(Math.abs(forward.dot(upHint)) > 0.999)) {
-                    Vector3d right = new Vector3d(forward).cross(upHint).normalize();
-                    if (right.lengthSquared() < 1.0E-12)
-                        return null;
+        Vec3 shaftLocal = Vec3.atLowerCornerOf(attachedShaftDirection.getNormal());
+        Vec3 carriageLocal = Vec3.atLowerCornerOf(attachedCarriageFacing.getNormal());
+        Vec3 shaftWorld = SimulatedHelper.toContainingWorldDirection(shaftBe, shaftLocal);
+        Vec3 carriageWorld = SimulatedHelper.toContainingWorldDirection(shaftBe, carriageLocal);
 
-                    Vector3d up = new Vector3d(right).cross(forward).normalize();
-                    Matrix3d basis = new Matrix3d().identity();
-                    basis.setColumn(0, forward);
-                    basis.setColumn(1, up);
-                    basis.setColumn(2, right);
+        if (shaftWorld == null || carriageWorld == null)
+            return null;
 
-                    Quaterniond orientation = new Quaterniond().setFromNormalized(basis).normalize();
-                    return Double.isFinite(orientation.x) && Double.isFinite(orientation.y) && Double.isFinite(orientation.z) ? orientation : null;
-                }
-            }
+        Vector3d forward = new Vector3d(shaftWorld.x, shaftWorld.y, shaftWorld.z).normalize();
+        Vector3d upHint = new Vector3d(carriageWorld.x, carriageWorld.y, carriageWorld.z).normalize();
+
+        if (!(Double.isFinite(forward.x) && Double.isFinite(upHint.x)))
+            return null;
+
+        if (Math.abs(forward.dot(upHint)) > 0.999) {
+            upHint = Math.abs(forward.y) < 0.9 ? new Vector3d(0, 1, 0) : new Vector3d(1, 0 ,0);
         }
 
-        return null;
+        Vector3d right = new Vector3d(forward).cross(upHint);
+        if (right.lengthSquared() < 1.0E-12) {
+            upHint = Math.abs(forward.y) < 0.9 ? new Vector3d(0, 1, 0) : new Vector3d(1, 0 ,0);
+            right = new Vector3d(forward).cross(upHint);
+            if (right.lengthSquared() < 1.0E-12)
+                return null;
+        }
+
+        right.normalize();
+        Vector3d up = new Vector3d(right).cross(forward).normalize();
+
+        Matrix3d basis = new Matrix3d().identity();
+        basis.setColumn(0, forward);
+        basis.setColumn(1, up);
+        basis.setColumn(2, right);
+
+        Quaterniond orientation = new Quaterniond().setFromNormalized(basis).normalize();
+        if (!Double.isFinite(orientation.x) || !Double.isFinite(orientation.y) || !Double.isFinite(orientation.z))
+            return null;
+
+        return orientation;
     }
 
     private Quaterniond resolveLockedOrientation(SubLevel subLevel) {
@@ -1377,6 +1386,34 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
         SubLevelContainer container = SubLevelContainer.getContainer(lookup);
         return container == null ? null : container.getSubLevel(attachedSubLevelId);
+    }
+
+    @Override
+    public void remove() {
+        super.remove();
+        if (level != null && !level.isClientSide) {
+            if (hasTrackedAttachmentState() || shaftConstraintHandle != null || shaftConstraintWorldAnchor != null) {
+                BlockPos previousShaftPos = attachedShaftPos;
+                clearShaftConstraint();
+                assembledToSubLevel = false;
+                attachedShaftPos = null;
+                attachedShaftDirection = null;
+                attachedCarriageFacing = null;
+                attachedShaftProgress = 0.0;
+                attachedShaftSubLevelId = null;
+                shaftConstraintWorldAnchor = null;
+                hasLockedSubLevelOrientation = false;
+                lockedSubLevelOrientation.identity();
+                hasLockedShaftFrameOrientation = false;
+                lockedShaftFrameOrientation.identity();
+                hasLockedLocalAttachmentAnchor = false;
+                lockedLocalAttachmentAnchor.set(0.0, 0.0, 0.0);
+                hasLockedRotationPoint = false;
+                lockedRotationPoint.set(0.0, 0.0, 0.0);
+                attachedSubLevelId = null;
+                refreshShaftAnchorLookup(previousShaftPos);
+            }
+        }
     }
 
     @Override
