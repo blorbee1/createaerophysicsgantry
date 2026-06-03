@@ -5,11 +5,9 @@ import com.blorbee.createaerophysicsgantry.content.physics_gantry_carriage.Physi
 import com.blorbee.createaerophysicsgantry.content.physics_gantry_carriage.PhysicsGantryCarriageBlockEntity;
 import com.blorbee.createaerophysicsgantry.registry.CAPGBlocks;
 import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
-import dev.ryanhcode.sable.sublevel.SubLevel;
 import net.createmod.catnip.data.Iterate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.core.Vec3i;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -36,12 +34,10 @@ public class PhysicsGantryShaftBlockEntity extends KineticBlockEntity {
             return;
         if (previousLevelRef != null && previousShaftPos != null && (previousLevelRef != level || !previousShaftPos.equals(worldPosition))) {
             moveAdjacentDisassembledCarriagesAcrossLevels(previousLevelRef, previousShaftPos, level, worldPosition);
-            disassembleAdjacentCarriagesIfShaftInWorld();
         }
         previousLevelRef = level;
         previousShaftPos = worldPosition.immutable();
         pullAdjacentDisassembledCarriagesIntoCurrentLevel();
-        syncAdjacentCarriagesToShaftSubLevel();
     }
 
     public void checkAttachedCarriageBlocks() {
@@ -154,66 +150,6 @@ public class PhysicsGantryShaftBlockEntity extends KineticBlockEntity {
     @Override
     protected boolean isNoisy() {
         return false;
-    }
-
-    private void syncAdjacentCarriagesToShaftSubLevel() {
-        if (level == null)
-            return;
-
-        BlockState shaftState = getBlockState();
-        if (shaftState.getBlock() != CAPGBlocks.PHYSICS_GANTRY_SHAFT.get())
-            return;
-
-        SubLevel shaftSubLevel = SimulatedHelper.getContainingSubLevel(this);
-        if (shaftSubLevel == null)
-            return;
-
-        Direction shaftFacing = shaftState.getValue(PhysicsGantryShaftBlock.FACING);
-        for (Direction d : Iterate.directions) {
-            if (d.getAxis() == shaftFacing.getAxis())
-                continue;
-
-            BlockPos carriagePos = worldPosition.relative(d);
-            BlockState carriageState = level.getBlockState(carriagePos);
-            if (carriageState.getBlock() != CAPGBlocks.PHYSICS_GANTRY_CARRIAGE.get())
-                continue;
-            if (carriageState.getValue(PhysicsGantryCarriageBlock.FACING) != d)
-                continue;
-
-            if (!(level.getBlockEntity(carriagePos) instanceof PhysicsGantryCarriageBlockEntity carriage))
-                continue;
-            if (carriage.isAssembledToSubLevel() || carriage.isSubLevelAssembled())
-                continue;
-
-            carriage.forceToggleAssembly();
-        }
-    }
-
-    private void disassembleAdjacentCarriagesIfShaftInWorld() {
-        if (level == null)
-            return;
-
-        SubLevel shaftSubLevel = SimulatedHelper.getContainingSubLevel(this);
-        if (shaftSubLevel != null)
-            return;
-
-        BlockState shaftState = getBlockState();
-        if (shaftState.getBlock() != CAPGBlocks.PHYSICS_GANTRY_SHAFT.get())
-            return;
-
-        Direction shaftFacing = shaftState.getValue(PhysicsGantryShaftBlock.FACING);
-        for (Direction d : Iterate.directions) {
-            if (d.getAxis() == shaftFacing.getAxis())
-                continue;
-
-            BlockPos carriagePos = worldPosition.relative(d);
-            if (!(level.getBlockEntity(carriagePos) instanceof PhysicsGantryCarriageBlockEntity carriage))
-                continue;
-            if (!carriage.isSubLevelAssembled())
-                continue;
-
-            carriage.forceToggleAssembly();
-        }
     }
 
     private void pullAdjacentDisassembledCarriagesIntoCurrentLevel() {
