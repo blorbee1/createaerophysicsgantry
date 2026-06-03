@@ -22,6 +22,7 @@ import dev.ryanhcode.sable.api.physics.constraint.PhysicsConstraintHandle;
 import dev.ryanhcode.sable.api.physics.constraint.fixed.FixedConstraintConfiguration;
 import dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
+import dev.ryanhcode.sable.companion.SableCompanion;
 import dev.ryanhcode.sable.companion.math.BoundingBox3i;
 import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
@@ -32,9 +33,11 @@ import dev.simulated_team.simulated.content.entities.honey_glue.HoneyGlueEntity;
 import dev.simulated_team.simulated.util.SimAssemblyHelper;
 import dev.simulated_team.simulated.util.assembly.SimAssemblyContraption;
 import net.createmod.catnip.math.AngleHelper;
+import net.createmod.catnip.math.VoxelShaper;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.SectionPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
@@ -47,6 +50,8 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import org.joml.*;
 import org.slf4j.Logger;
 
@@ -825,12 +830,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             return;
         }
 
-        if (isSubLevelDockedToExternal(subLevel)) {
-            resetSubLevelVelocity(subLevel);
-            applyAttachmentPose(subLevel);
-            return;
-        }
-
         if (shaftBe == null)
             return;
 
@@ -845,7 +844,10 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             int backwardSpan = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection.getOpposite());
 
             double nextProgress = Mth.clamp(attachedShaftProgress + delta, -backwardSpan, forwardSpan);
-            if (!wouldAttachedSubLevelHitProtectedWorldBlock(subLevel, nextProgress)) {
+            boolean allowMovement = !isSubLevelDockedToExternal(subLevel) &&
+                !wouldAttachedSubLevelHitAWorldBlock(subLevel, nextProgress);
+
+            if (allowMovement) {
                 attachedShaftProgress = nextProgress;
             } else {
                 resetSubLevelVelocity(subLevel);
@@ -917,7 +919,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         }
     }
 
-    private boolean wouldAttachedSubLevelHitProtectedWorldBlock(SubLevel subLevel, double progress) {
+    private boolean wouldAttachedSubLevelHitAWorldBlock(SubLevel subLevel, double progress) {
         if (subLevel != null && attachedShaftPos != null && attachedShaftDirection != null && attachedCarriageFacing != null) {
             PhysicsGantryShaftBlockEntity shaftBe = findAttachedShaftEntity(attachedShaftPos, attachedShaftSubLevelId);
             if (shaftBe == null)
@@ -929,7 +931,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
             Quaterniond orientation = resolveLockedOrientation(subLevel);
             Vector3d targetPosition = computeLockedAttachmentTargetPosition(subLevel, worldAnchor, orientation);
-            return wouldSubLevelHitProtectedWorldBlock(subLevel, targetPosition, orientation);
+            return wouldSubLevelHitAWorldBlock(subLevel, targetPosition, orientation);
         } else {
             return false;
         }
@@ -944,40 +946,39 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         return SimulatedHelper.toContainingWorldPosition(shaftBe, localAnchor);
     }
 
-    private boolean wouldSubLevelHitProtectedWorldBlock(SubLevel subLevel, Vector3dc targetPosition, Quaterniond orientation) {
+    private boolean wouldSubLevelHitAWorldBlock(SubLevel subLevel, Vector3dc targetPosition, Quaterniond orientation) {
         ServerLevel serverLevel = resolveServerLevel(level);
-        if (serverLevel != null && subLevel != null && targetPosition != null && orientation != null) {
-            int[] bounds = getSubLevelBlockBounds(subLevel);
-            if (bounds == null)
-                return true;
+        if (serverLevel == null || subLevel == null || targetPosition == null || orientation == null)
+            return true;
 
-            Vector3d rotationPoint = subLevel.logicalPose().rotationPoint();
-            if (rotationPoint == null)
-                rotationPoint = new Vector3d();
+        int[] bounds = getSubLevelBlockBounds(subLevel);
+        if (bounds == null)
+            return true;
 
-            for (int x = bounds[0]; x <= bounds[3]; x++) {
-                for (int y = bounds[1]; y <= bounds[4]; y++) {
-                    for (int z = bounds[2]; z <= bounds[5]; z++) {
-                        BlockPos localPos = new BlockPos(x, y, z);
-                        BlockState payloadState = serverLevel.getBlockState(localPos);
+        Vector3d rotationPoint = subLevel.logicalPose().rotationPoint();
+        if (rotationPoint == null)
+            rotationPoint = new Vector3d();
 
-                        if (!payloadState.isAir()) {
-                            if (isProtectedWorldBlock(serverLevel, localPos, payloadState))
-                                return true;
+        for (int x = bounds[0]; x <= bounds[3]; x++) {
+            for (int y = bounds[1]; y <= bounds[4]; y++) {
+                for (int z = bounds[2]; z <= bounds[5]; z++) {
+                    BlockPos localPos = new BlockPos(x, y, z);
+                    BlockState payloadState = serverLevel.getBlockState(localPos);
+                    if (payloadState.isAir())
+                        continue;
 
-                            BlockPos targetPos = transformSubLevelBlockToWorld(localPos, rotationPoint, targetPosition, orientation);
-                            BlockState targetState = serverLevel.getBlockState(targetPos);
-                            if (isProtectedWorldBlock(serverLevel, targetPos, targetState))
-                                return true;
-                        }
-                    }
+                    if (isAWorldBlock(serverLevel, localPos, payloadState))
+                        return true;
+
+                    BlockPos targetPos = transformSubLevelBlockToWorld(localPos, rotationPoint, targetPosition, orientation);
+                    BlockState targetState = serverLevel.getBlockState(targetPos);
+                    if (isAWorldBlock(serverLevel, targetPos, targetState))
+                        return true;
                 }
             }
-
-            return false;
-        } else {
-            return false;
         }
+
+        return false;
     }
 
     private boolean wouldDisassemblyOverwriteProtectedWorldBlock(SubLevel subLevel, BlockPos anchor, BlockPos goal) {
@@ -1035,6 +1036,10 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
     private boolean isProtectedWorldBlock(Level chunkLevel, BlockPos pos, BlockState state) {
         return state.getBlock() == Blocks.BEDROCK || state.getDestroySpeed(chunkLevel, pos) == -1.0F;
+    }
+
+    private boolean isAWorldBlock(Level chunkLevel, BlockPos pos, BlockState state) {
+        return state.getBlock() != Blocks.AIR && !SableCompanion.INSTANCE.isInPlotGrid(chunkLevel, pos);
     }
 
     private void detachFromShaft(String reason) {
