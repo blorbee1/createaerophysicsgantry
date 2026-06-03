@@ -237,7 +237,9 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                     }
                 }
 
-                FixedConstraintConfiguration fixedConstraint = new FixedConstraintConfiguration(pos1, rotationPoint, orientation);
+                Quaterniond constraintOrientation = shaftSubLevel != null ? new Quaterniond() : orientation;
+
+                FixedConstraintConfiguration fixedConstraint = new FixedConstraintConfiguration(pos1, rotationPoint, constraintOrientation);
                 ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
                 if (container == null)
                     return;
