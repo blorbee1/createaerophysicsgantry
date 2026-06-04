@@ -842,7 +842,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
             double nextProgress = Mth.clamp(attachedShaftProgress + delta, -backwardSpan, forwardSpan);
             boolean allowMovement = !isSubLevelDockedToExternal(subLevel) &&
-                !wouldAttachedSubLevelHitAWorldBlock(subLevel, nextProgress);
+                !wouldAttachedSubLevelHitAWorldBlock(subLevel, nextProgress, Math.signum(delta));
 
             if (allowMovement) {
                 attachedShaftProgress = nextProgress;
@@ -975,22 +975,44 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         }
     }
 
-    private boolean wouldAttachedSubLevelHitAWorldBlock(SubLevel subLevel, double progress) {
+    private boolean wouldAttachedSubLevelHitAWorldBlock(SubLevel subLevel, double progress, float movementSign) {
         if (subLevel != null && attachedShaftPos != null && attachedShaftDirection != null && attachedCarriageFacing != null) {
             PhysicsGantryShaftBlockEntity shaftBe = findAttachedShaftEntity(attachedShaftPos, attachedShaftSubLevelId);
             if (shaftBe == null)
                 return true;
 
-            Vec3 worldAnchor = computeAttachmentWorldAnchor(shaftBe, progress);
-            if (worldAnchor == null)
-                return true;
+            double fromProgress = attachedShaftProgress;
+            double toProgress = progress;
+            double step = 0.25 * movementSign;
+
+            if (step == 0) {
+                step = toProgress > fromProgress ? 0.25 : -0.25;
+            }
 
             Quaterniond orientation = resolveLockedOrientation(subLevel);
-            Vector3d targetPosition = computeLockedAttachmentTargetPosition(subLevel, worldAnchor, orientation);
-            return wouldSubLevelHitAWorldBlock(subLevel, targetPosition, orientation);
-        } else {
-            return false;
+
+            double current = fromProgress;
+            boolean done = false;
+            while (!done) {
+                if (movementSign > 0) {
+                    current = Math.min(current + Math.abs(step), toProgress);
+                    done = current >= toProgress;
+                } else {
+                    current = Math.max(current - Math.abs(step), toProgress);
+                    done = current <= toProgress;
+                }
+
+                Vec3 worldAnchor = computeAttachmentWorldAnchor(shaftBe, current);
+                if (worldAnchor == null)
+                    return true;
+
+                Vector3d targetPosition = computeLockedAttachmentTargetPosition(subLevel, worldAnchor, orientation);
+                if (wouldSubLevelHitAWorldBlock(subLevel, targetPosition, orientation, movementSign))
+                    return true;
+            }
         }
+
+        return false;
     }
 
     private Vec3 computeAttachmentWorldAnchor(PhysicsGantryShaftBlockEntity shaftBe, double progress) {
@@ -1002,7 +1024,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         return SimulatedHelper.toContainingWorldPosition(shaftBe, localAnchor);
     }
 
-    private boolean wouldSubLevelHitAWorldBlock(SubLevel subLevel, Vector3dc targetPosition, Quaterniond orientation) {
+    private boolean wouldSubLevelHitAWorldBlock(SubLevel subLevel, Vector3dc targetPosition, Quaterniond orientation, float movementSign) {
         ServerLevel serverLevel = resolveServerLevel(level);
         if (serverLevel == null || subLevel == null || targetPosition == null || orientation == null)
             return true;
@@ -1015,6 +1037,10 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         if (rotationPoint == null)
             rotationPoint = new Vector3d();
 
+        double faceOffsetX = attachedShaftDirection.getStepX() * 0.5 * movementSign;
+        double faceOffsetY = attachedShaftDirection.getStepY() * 0.5 * movementSign;
+        double faceOffsetZ = attachedShaftDirection.getStepZ() * 0.5 * movementSign;
+
         for (int x = bounds[0]; x <= bounds[3]; x++) {
             for (int y = bounds[1]; y <= bounds[4]; y++) {
                 for (int z = bounds[2]; z <= bounds[5]; z++) {
@@ -1022,13 +1048,24 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                     BlockState payloadState = serverLevel.getBlockState(localPos);
                     if (payloadState.isAir())
                         continue;
-
                     if (isAWorldBlock(serverLevel, localPos, payloadState))
                         return true;
 
-                    BlockPos targetPos = transformSubLevelBlockToWorld(localPos, rotationPoint, targetPosition, orientation);
-                    BlockState targetState = serverLevel.getBlockState(targetPos);
-                    if (isAWorldBlock(serverLevel, targetPos, targetState))
+                    BlockPos targetCenter = transformSubLevelBlockToWorld(localPos, rotationPoint, targetPosition, orientation);
+                    if (isAWorldBlock(serverLevel, targetCenter, serverLevel.getBlockState(targetCenter)))
+                        return true;
+
+                    Vector3d leadingFaceLocal = new Vector3d(
+                        localPos.getX() + 0.5 + faceOffsetX,
+                        localPos.getY() + 0.5 + faceOffsetY,
+                        localPos.getZ() + 0.5 + faceOffsetZ
+                    ).sub(rotationPoint);
+
+                    new Quaterniond(orientation).transform(leadingFaceLocal);
+                    leadingFaceLocal.add(targetPosition);
+
+                    BlockPos leadingFaceWorld = BlockPos.containing(leadingFaceLocal.x, leadingFaceLocal.y, leadingFaceLocal.z);
+                    if (isAWorldBlock(serverLevel, leadingFaceWorld, serverLevel.getBlockState(leadingFaceWorld)))
                         return true;
                 }
             }
