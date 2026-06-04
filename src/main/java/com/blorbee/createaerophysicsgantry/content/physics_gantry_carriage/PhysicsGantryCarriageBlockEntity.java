@@ -33,11 +33,9 @@ import dev.simulated_team.simulated.content.entities.honey_glue.HoneyGlueEntity;
 import dev.simulated_team.simulated.util.SimAssemblyHelper;
 import dev.simulated_team.simulated.util.assembly.SimAssemblyContraption;
 import net.createmod.catnip.math.AngleHelper;
-import net.createmod.catnip.math.VoxelShaper;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
-import net.minecraft.core.SectionPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
@@ -50,8 +48,6 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.Shapes;
-import net.minecraft.world.phys.shapes.VoxelShape;
 import org.joml.*;
 import org.slf4j.Logger;
 
@@ -839,7 +835,8 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             delta = Mth.clamp(convertToLinear(-shaftBe.getSpeed()), -0.49F, 0.49F);
         }
 
-        if (!shaftState.getValue(PhysicsGantryShaftBlock.POWERED) && delta != 0.0F) {
+        boolean tryMoving = !shaftState.getValue(PhysicsGantryShaftBlock.POWERED) && delta != 0.0F;
+        if (tryMoving) {
             int forwardSpan = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection);
             int backwardSpan = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection.getOpposite());
 
@@ -855,6 +852,10 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         }
 
         applyAttachmentPose(subLevel);
+
+        if (tryMoving) {
+            updateTrackedShaftWhileMoving(subLevel);
+        }
     }
 
     private boolean isSubLevelDockedToExternal(SubLevel subLevel) {
@@ -869,6 +870,61 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         }
 
         return false;
+    }
+
+    private void updateTrackedShaftWhileMoving(SubLevel subLevel) {
+        if (level == null || subLevel == null)
+            return;
+        if (attachedSubLevelId == null)
+            return;
+
+        BlockState blockState = getBlockState();
+        if (!(blockState.getBlock() instanceof PhysicsGantryCarriageBlock))
+            return;
+
+        Direction carriageFacing = blockState.getValue(PhysicsGantryCarriageBlock.FACING);
+        BlockPos shaftPos = worldPosition.relative(carriageFacing.getOpposite());
+
+        PhysicsGantryShaftBlockEntity shaftBe = level.getBlockEntity(shaftPos) instanceof PhysicsGantryShaftBlockEntity be
+            ? be
+            : SimulatedHelper.findBlockEntityIncludingSubLevels(level, shaftPos, PhysicsGantryShaftBlockEntity.class);
+        if (shaftBe == null) {
+            clearAttachmentTrackingStateAndRefreshShaft();
+            setChanged();
+            return;
+        }
+
+        shaftPos = shaftBe.getBlockPos();
+
+        BlockState shaftState = shaftBe.getBlockState();
+        if (shaftState.getBlock() != CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()) {
+            clearAttachmentTrackingStateAndRefreshShaft();
+            setChanged();
+            return;
+        }
+
+        UUID shaftSubLevelId = SimulatedHelper.getContainingSubLevelId(shaftBe);
+        if (shaftSubLevelId != attachedShaftSubLevelId) {
+            clearAttachmentTrackingStateAndRefreshShaft();
+            setChanged();
+            return;
+        }
+
+        Direction shaftDirection = shaftState.getValue(PhysicsGantryShaftBlock.FACING);
+        if (shaftDirection != attachedShaftDirection) {
+            clearAttachmentTrackingStateAndRefreshShaft();
+            setChanged();
+            return;
+        }
+
+        boolean changed = shaftPos != attachedShaftPos;
+        if (changed) {
+            setAssembledAttachmentState(shaftPos, attachedShaftDirection, attachedCarriageFacing, attachedSubLevelId, attachedShaftSubLevelId);
+
+            setChanged();
+            sendData();
+            LOGGER.debug("[PhysicsGantry] updated attachedShaftPos while moving to {} subLevel={}", shaftPos, attachedShaftSubLevelId);
+        }
     }
 
     private void applyAttachmentPose(SubLevel subLevel) {
@@ -1042,15 +1098,19 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         return state.getBlock() != Blocks.AIR && !SableCompanion.INSTANCE.isInPlotGrid(chunkLevel, pos);
     }
 
-    private void detachFromShaft(String reason) {
+    public void detachFromShaft(String reason) {
         if (level != null && !level.isClientSide) {
             if (hasTrackedAttachmentState() || shaftConstraintHandle != null || shaftConstraintWorldAnchor != null) {
+                clearShaftConstraint();
+                clearAttachmentTrackingStateAndRefreshShaft();
+
                 if (level instanceof ServerLevel serverLevel) {
                     serverLevel.destroyBlock(getBlockPos(), true);
                 }
+
                 LOGGER.debug(
-                    "[PhysicsGantry] detached from shaft pos={} reason={}",
-                    this.worldPosition, reason);
+                    "[PhysicsGantry] detached from shaft pos={} reason={} sublevelid={}",
+                    this.worldPosition, reason, SimulatedHelper.getContainingSubLevelId(this));
             }
         }
     }
@@ -1069,33 +1129,10 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
     private void clearShaftConstraint() {
         if (shaftConstraintHandle != null) {
-            try {
-                boolean removed = this.invokeConstraintRemove(this.shaftConstraintHandle, "remove")
-                    || this.invokeConstraintRemove(this.shaftConstraintHandle, "destroy")
-                    || this.invokeConstraintRemove(this.shaftConstraintHandle, "invalidate");
-                if (!removed) {
-                    LOGGER.warn(
-                        "[PhysicsGantry] constraint remove failed at {} handleClass={}", this.worldPosition, this.shaftConstraintHandle.getClass().getName()
-                    );
-                }
-            } catch (Exception e) {
-                LOGGER.warn("[PhysicsGantry] constraint remove exception at {}: {}", this.worldPosition, e.toString());
-            }
-
-            shaftConstraintHandle = null;
-            shaftConstraintWorldAnchor = null;
+            shaftConstraintHandle.remove();
         }
-    }
-
-    private boolean invokeConstraintRemove(PhysicsConstraintHandle handle, String methodName) {
-        try {
-            Method method = handle.getClass().getMethod(methodName);
-            method.setAccessible(true);
-            method.invoke(handle);
-            return true;
-        } catch (Exception ignored) {
-            return false;
-        }
+        shaftConstraintHandle = null;
+        shaftConstraintWorldAnchor = null;
     }
 
     private int measureShaftSpan(Level lookupLevel, BlockPos origin, Direction direction) {
@@ -1215,19 +1252,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             return BlockPos.containing(targetCenter.x, targetCenter.y, targetCenter.z);
         } else {
             return nearestGridFromSubLevel(subLevel);
-        }
-    }
-
-    private void teleportSubLevel(SubLevel subLevel, Vector3dc position, Quaterniondc orientation) {
-        if (subLevel != null && position != null && orientation != null && level != null && level instanceof ServerLevel serverLevel) {
-            ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
-            if (container == null)
-                return;
-
-            SubLevelPhysicsSystem physics = container.physicsSystem();
-            PhysicsPipeline pipeline = physics.getPipeline();
-
-            pipeline.teleport((PhysicsPipelineBody) subLevel, position, orientation);
         }
     }
 
@@ -1397,30 +1421,15 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
     @Override
     public void remove() {
-        super.remove();
         if (level != null && !level.isClientSide) {
-            if (hasTrackedAttachmentState() || shaftConstraintHandle != null || shaftConstraintWorldAnchor != null) {
-                BlockPos previousShaftPos = attachedShaftPos;
+            //if (hasTrackedAttachmentState() || shaftConstraintHandle != null || shaftConstraintWorldAnchor != null) {
                 clearShaftConstraint();
-                assembledToSubLevel = false;
-                attachedShaftPos = null;
-                attachedShaftDirection = null;
-                attachedCarriageFacing = null;
-                attachedShaftProgress = 0.0;
-                attachedShaftSubLevelId = null;
-                shaftConstraintWorldAnchor = null;
-                hasLockedSubLevelOrientation = false;
-                lockedSubLevelOrientation.identity();
-                hasLockedShaftFrameOrientation = false;
-                lockedShaftFrameOrientation.identity();
-                hasLockedLocalAttachmentAnchor = false;
-                lockedLocalAttachmentAnchor.set(0.0, 0.0, 0.0);
-                hasLockedRotationPoint = false;
-                lockedRotationPoint.set(0.0, 0.0, 0.0);
-                attachedSubLevelId = null;
-                refreshShaftAnchorLookup(previousShaftPos);
-            }
+                clearAttachmentTrackingStateAndRefreshShaft();
+                setChanged();
+                sendData();
+            //}
         }
+        super.remove();
     }
 
     @Override

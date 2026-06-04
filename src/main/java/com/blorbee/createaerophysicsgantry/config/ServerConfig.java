@@ -7,9 +7,9 @@ import net.neoforged.neoforge.common.ModConfigSpec;
 public class ServerConfig {
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
-    public static final ModConfigSpec.IntValue PHYSICS_GANTRY_BELT_WHEEL_MAX_DISTANCE = BUILDER
-            .comment("Maximum allowed link distance for Physics Gantry Belt Wheel (hard capped at 64 blocks)")
-            .defineInRange("physicsGantryBeltWheelMaxDistance", 64, 1, 64);
+    public static final ModConfigSpec.IntValue BELT_WHEEL_MAX_DISTANCE = BUILDER
+            .comment("Maximum allowed link distance for Belt Wheel (hard capped at 64 blocks)")
+            .defineInRange("beltWheelMaxDistance", 64, 1, 64);
 
     private static final ModConfigSpec SPEC = BUILDER.build();
 
