@@ -124,10 +124,10 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         lastToggleGameTime = now;
 
         SubLevel currentSubLevel = resolveAttachedSubLevel();
-        LOGGER.info(
-            "[PhysicsGantry] toggle requested pos={} assembled={} hasSubLevel={}",
-            worldPosition, assembledToSubLevel, currentSubLevel != null
-        );
+//        LOGGER.info(
+//            "[PhysicsGantry] toggle requested pos={} assembled={} hasSubLevel={}",
+//            worldPosition, assembledToSubLevel, currentSubLevel != null
+//        );
 
         if (isAttachedPayloadSubLevel(currentSubLevel)) {
             PhysicsGantryCarriageBlockEntity active = resolveActiveCarriageInstance(null, null, null);
@@ -279,7 +279,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         if (shaftBe == null)
             return;
 
-        LOGGER.info("[PhysicsGantry] shaft assembled into sublevel, auto-assembling carriage at {}", worldPosition);
+        //LOGGER.info("[PhysicsGantry] shaft assembled into sublevel, auto-assembling carriage at {}", worldPosition);
         clearAttachmentTrackingState();
         doSubLevelAssemble();
     }
@@ -295,7 +295,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
         BlockState blockState = getBlockState();
         if (!(blockState.getBlock() instanceof PhysicsGantryCarriageBlock)) {
-            LOGGER.warn("[PhysicsGantry] assemble aborted: not carriage block pos={}", worldPosition);
+            //LOGGER.warn("[PhysicsGantry] assemble aborted: not carriage block pos={}", worldPosition);
             return;
         }
 
@@ -306,17 +306,17 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             ? be
             : SimulatedHelper.findBlockEntityIncludingSubLevels(level, shaftPos, PhysicsGantryShaftBlockEntity.class);
         if (shaftBe == null) {
-            LOGGER.warn("[PhysicsGantry] assemble aborted: no shaft BE at {} from {}", shaftPos, worldPosition);
+            //LOGGER.warn("[PhysicsGantry] assemble aborted: no shaft BE at {} from {}", shaftPos, worldPosition);
             return;
         }
 
         BlockState shaftState = shaftBe.getBlockState();
         if (shaftState.getBlock() != CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()) {
-            LOGGER.warn("[PhysicsGantry] assemble aborted: wrong shaft block at {}", shaftPos);
+            //LOGGER.warn("[PhysicsGantry] assemble aborted: wrong shaft block at {}", shaftPos);
             return;
         }
         if (!shouldAssemble()) {
-            LOGGER.warn("[PhysicsGantry] assemble aborted: shouldAssemble=false, pos={}", worldPosition);
+            //LOGGER.warn("[PhysicsGantry] assemble aborted: shouldAssemble=false, pos={}", worldPosition);
             return;
         }
 
@@ -338,9 +338,9 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             PhysicsGantryCarriageBlockEntity active = resolveActiveCarriageInstance(result.movedCarriagePos(),
                 result.offset(), assembledSubLevel);
 
-            if (active.resolveAttachedSubLevel() == null && active != this) {
-                LOGGER.warn("[PhysicsGantry] active carriage unresolved after assemble origin={} active={}", worldPosition, active.worldPosition);
-            }
+//            if (active.resolveAttachedSubLevel() == null && active != this) {
+//                LOGGER.warn("[PhysicsGantry] active carriage unresolved after assemble origin={} active={}", worldPosition, active.worldPosition);
+//            }
 
             Direction shaftDirection = shaftState.getValue(PhysicsGantryShaftBlock.FACING);
             UUID attachedId = assembledSubLevel.getUniqueId();
@@ -371,8 +371,8 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 }
             }
 
-            LOGGER.info("[PhysicsGantry] assembled pos={} active={} shaft={} dir={} face={}",
-                worldPosition, active.worldPosition, shaftPos, shaftDirection, carriageFacing);
+//            LOGGER.info("[PhysicsGantry] assembled pos={} active={} shaft={} dir={} face={}",
+//                worldPosition, active.worldPosition, shaftPos, shaftDirection, carriageFacing);
 
             sendData();
             if (active != this) {
@@ -381,7 +381,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
             AllSoundEvents.CONTRAPTION_ASSEMBLE.playOnServer(level, worldPosition);
         } else {
-            LOGGER.warn("[PhysicsGantry] assemble returned null/no server sublevel at {}", worldPosition);
+            //LOGGER.warn("[PhysicsGantry] assemble returned null/no server sublevel at {}", worldPosition);
         }
     }
 
@@ -402,7 +402,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             honeyGlues.addAll(carriageContraption.getHoneyGlues());
         } else {
             assembledBlocks.add(worldPosition);
-            LOGGER.info("[PhysicsGantry] ignoring enclosing glue box at carriage {}", worldPosition);
+            //LOGGER.info("[PhysicsGantry] ignoring enclosing glue box at carriage {}", worldPosition);
         }
 
         BlockState carriageState = getBlockState();
@@ -428,8 +428,8 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         if (subLevel == null)
             return null;
 
-        LOGGER.info("[PhysicsGantry] assembledBlocks={} anchor={} plotCenter={} sublevelPos={}",
-            assembledBlocks, anchor, subLevel.getPlot().getCenterBlock(), subLevel.logicalPose().position());
+//        LOGGER.info("[PhysicsGantry] assembledBlocks={} anchor={} plotCenter={} sublevelPos={}",
+//            assembledBlocks, anchor, subLevel.getPlot().getCenterBlock(), subLevel.logicalPose().position());
 
         BlockPos offsetBlocks = subLevel.getPlot().getCenterBlock().subtract(anchor);
         Vec3 offset = Vec3.atLowerCornerOf(offsetBlocks);
@@ -545,7 +545,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                     && !be.isRemoved()
                     && movedCarriagePos.equals(be.getBlockPos())
                 ) {
-                    LOGGER.info("[PhysicsGantry] found BE at movedCarriagePos class={} isCarriage={}", be.getClass().getName(), be instanceof PhysicsGantryCarriageBlockEntity);
+                    //LOGGER.info("[PhysicsGantry] found BE at movedCarriagePos class={} isCarriage={}", be.getClass().getName(), be instanceof PhysicsGantryCarriageBlockEntity);
                     if (be instanceof PhysicsGantryCarriageBlockEntity carriage)
                         return carriage;
                 }
@@ -584,7 +584,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
         ServerLevel serverLevel = resolveServerLevel(level);
         if (serverLevel == null) {
-            LOGGER.warn("[PhysicsGantry] disassemble aborted: no server level for {}", worldPosition);
+            //LOGGER.warn("[PhysicsGantry] disassemble aborted: no server level for {}", worldPosition);
             return;
         }
 
@@ -597,8 +597,8 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             sendData();
             return;
         } else if (!isAttachedPayloadSubLevel(subLevel)) {
-            LOGGER.warn("[PhysicsGantry] disassemble skipped unsafe parent host pos={} shaft={} subLevelId={}",
-                worldPosition, attachedShaftPos, attachedSubLevelId);
+//            LOGGER.warn("[PhysicsGantry] disassemble skipped unsafe parent host pos={} shaft={} subLevelId={}",
+//                worldPosition, attachedShaftPos, attachedSubLevelId);
             clearAttachmentTrackingStateAndRefreshShaft();
             sendData();
             return;
@@ -607,7 +607,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         BlockPos disassemblyAnchor = worldPosition;
         BlockPos disassemblyGoal = resolveDisassemblyGoalBlockPos(subLevel);
         if (wouldDisassemblyOverwriteProtectedWorldBlock(subLevel, disassemblyAnchor, disassemblyGoal)) {
-            LOGGER.warn("[PhysicsGantry] disassembly blocked by protected block at {} goal={}", worldPosition, disassemblyGoal);
+            //LOGGER.warn("[PhysicsGantry] disassembly blocked by protected block at {} goal={}", worldPosition, disassemblyGoal);
             return;
         }
 
@@ -956,8 +956,8 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
         setChanged();
         sendData();
-        LOGGER.debug("[PhysicsGantry] updated attachedShaftPos while moving to {} subLevel={} attachedShaftProgress={} oldprogress={}",
-            shaftPos, attachedShaftSubLevelId, attachedShaftProgress, oldProgress);
+//        LOGGER.debug("[PhysicsGantry] updated attachedShaftPos while moving to {} subLevel={} attachedShaftProgress={} oldprogress={}",
+//            shaftPos, attachedShaftSubLevelId, attachedShaftProgress, oldProgress);
     }
 
     private void applyAttachmentPose(SubLevel subLevel) {
@@ -1206,9 +1206,9 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 setChanged();
                 sendData();
 
-                LOGGER.debug(
-                    "[PhysicsGantry] detached from shaft pos={} reason={} sublevelid={}",
-                    this.worldPosition, reason, SimulatedHelper.getContainingSubLevelId(this));
+//                LOGGER.debug(
+//                    "[PhysicsGantry] detached from shaft pos={} reason={} sublevelid={}",
+//                    this.worldPosition, reason, SimulatedHelper.getContainingSubLevelId(this));
             }
         }
     }
@@ -1498,8 +1498,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
     private Vector3d computeLockedAttachmentTargetPosition(SubLevel subLevel, Vec3 worldAnchor, Quaterniond orientation) {
         if (!hasLockedLocalAttachmentAnchor) {
             Vec3 initialLocal = toSubLevelLocalAnchor(subLevel, worldAnchor);
-            LOGGER.info("[PhysicsGantry] sublevel position={} orientation={} worldAnchor={} initialLocal={}",
-                subLevel.logicalPose().position(), subLevel.logicalPose().orientation(), worldAnchor, initialLocal);
             if (initialLocal != null && Double.isFinite(initialLocal.x) && Double.isFinite(initialLocal.y) && Double.isFinite(initialLocal.z)) {
                 lockedLocalAttachmentAnchor.set(initialLocal.x, initialLocal.y, initialLocal.z);
             } else {
