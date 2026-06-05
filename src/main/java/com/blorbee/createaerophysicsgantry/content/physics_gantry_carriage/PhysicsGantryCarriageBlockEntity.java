@@ -784,6 +784,11 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         UUID currentShaftSubLevelId = shaftBe == null ? null : SimulatedHelper.getContainingSubLevelId(shaftBe);
 
         if (!Objects.equals(currentShaftSubLevelId, attachedShaftSubLevelId)) {
+            if (currentShaftSubLevelId == null && shaftBe == null && attachedShaftSubLevelId != null) {
+                detachFromShaft("shaft-sublevel-destroyed");
+                return;
+            }
+
             attachedShaftSubLevelId = currentShaftSubLevelId;
 
             if (currentShaftSubLevelId == null) {
@@ -821,7 +826,11 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             setChanged();
         }
 
-        if (!hasValidAttachedShaft(lookupLevel)) {
+//        if (!hasValidAttachedShaft(lookupLevel)) {
+//            detachFromShaft("tick-invalid-shaft");
+//            return;
+//        }
+        if (measureValidProgressRange() == null) {
             detachFromShaft("tick-invalid-shaft");
             return;
         }
@@ -837,10 +846,22 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
         boolean tryMoving = !shaftState.getValue(PhysicsGantryShaftBlock.POWERED) && delta != 0.0F;
         if (tryMoving) {
-            int forwardSpan = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection);
-            int backwardSpan = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection.getOpposite());
+            double[] range = measureValidProgressRange();
+            if (range == null) {
+                detachFromShaft("tick-invalid-shaft");
+                return;
+            }
 
-            double nextProgress = Mth.clamp(attachedShaftProgress + delta, -backwardSpan, forwardSpan);
+//            int forwardSpan = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection);
+//            int backwardSpan = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection.getOpposite());
+
+            double nextProgress;
+            if (delta > 0) {
+                nextProgress = Math.min(attachedShaftProgress + delta, range[1]);
+            } else {
+                nextProgress = Math.max(attachedShaftProgress + delta, range[0]);
+            }
+
             boolean allowMovement = !isSubLevelDockedToExternal(subLevel) &&
                 !wouldAttachedSubLevelHitAWorldBlock(subLevel, nextProgress, Math.signum(delta));
 
@@ -853,9 +874,9 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
         applyAttachmentPose(subLevel);
 
-        if (tryMoving) {
-            updateTrackedShaftWhileMoving(subLevel);
-        }
+//        if (tryMoving) {
+//            updateTrackedShaftWhileMoving(subLevel);
+//        }
     }
 
     private boolean isSubLevelDockedToExternal(SubLevel subLevel) {
@@ -917,14 +938,26 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             return;
         }
 
-        boolean changed = shaftPos != attachedShaftPos;
-        if (changed) {
-            setAssembledAttachmentState(shaftPos, attachedShaftDirection, attachedCarriageFacing, attachedSubLevelId, attachedShaftSubLevelId);
+        if (shaftPos.equals(attachedShaftPos))
+            return;
 
-            setChanged();
-            sendData();
-            LOGGER.debug("[PhysicsGantry] updated attachedShaftPos while moving to {} subLevel={}", shaftPos, attachedShaftSubLevelId);
-        }
+        BlockPos oldShaftPos = attachedShaftPos;
+        BlockPos delta = shaftPos.subtract(oldShaftPos);
+
+        double blockOffset = delta.getX() * attachedShaftDirection.getStepX() +
+            delta.getY() * attachedShaftDirection.getStepY() +
+            delta.getZ() * attachedShaftDirection.getStepZ();
+
+        double oldProgress = attachedShaftProgress;
+        double adjustedProgress = attachedShaftProgress - blockOffset;
+
+        attachedShaftPos = shaftPos.immutable();
+        attachedShaftProgress = adjustedProgress;
+
+        setChanged();
+        sendData();
+        LOGGER.debug("[PhysicsGantry] updated attachedShaftPos while moving to {} subLevel={} attachedShaftProgress={} oldprogress={}",
+            shaftPos, attachedShaftSubLevelId, attachedShaftProgress, oldProgress);
     }
 
     private void applyAttachmentPose(SubLevel subLevel) {
@@ -1139,11 +1172,39 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         if (level != null && !level.isClientSide) {
             if (hasTrackedAttachmentState() || shaftConstraintHandle != null || shaftConstraintWorldAnchor != null) {
                 clearShaftConstraint();
-                clearAttachmentTrackingStateAndRefreshShaft();
 
-                if (level instanceof ServerLevel serverLevel) {
-                    serverLevel.destroyBlock(getBlockPos(), true);
+                SubLevel carriageSubLevel = resolveAttachedSubLevel();
+                if (carriageSubLevel == null)
+                    carriageSubLevel = SimulatedHelper.getContainingSubLevel(this);
+
+                // TODO: try to fix shaft assembled unassembled carriage, break shaft
+                // it works when using disassembleSubLevel, the block will fall
+                // by using disassembleSubLevel will cause other paths not to make the block fall because the sublevel got disassembled
+                // dont ask me why disassembling doesnt actually disassemble the block
+                if (carriageSubLevel != null) {
+//                    clearAttachmentTrackingStateAndRefreshShaft();
+//                    if (level instanceof ServerLevel serverLevel) {
+//                        serverLevel.destroyBlock(getBlockPos(), true);
+//                    }
+                    ServerLevel serverLevel = resolveServerLevel(level);
+                    if (serverLevel != null) {
+                        BlockPos disassemblyGoal = resolveDisassemblyGoalBlockPos(carriageSubLevel);
+                        clearAttachmentTrackingStateAndRefreshShaft();
+                        SimAssemblyHelper.disassembleSubLevel(serverLevel, carriageSubLevel, worldPosition, disassemblyGoal, Rotation.NONE, true);
+                    }
+                } else {
+                    clearAttachmentTrackingStateAndRefreshShaft();
+                    if (level instanceof ServerLevel serverLevel) {
+                        serverLevel.destroyBlock(getBlockPos(), true);
+                    }
                 }
+
+//                if (level instanceof ServerLevel serverLevel) {
+//                    serverLevel.destroyBlock(getBlockPos(), true);
+//                }
+
+                setChanged();
+                sendData();
 
                 LOGGER.debug(
                     "[PhysicsGantry] detached from shaft pos={} reason={} sublevelid={}",
@@ -1186,6 +1247,69 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 return distance;
             distance++;
         }
+    }
+
+    private double[] measureValidProgressRange() {
+        if (attachedShaftPos == null || attachedShaftDirection == null || level == null)
+            return new double[]{0, 0};
+
+        BlockState anchorState = findAttachedShaftState(attachedShaftPos, attachedShaftSubLevelId);
+        if (anchorState == null)
+            anchorState = resolveLookupLevel(level).getBlockState(attachedShaftPos);
+
+        if (anchorState.getBlock() != CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()
+            || anchorState.getValue(PhysicsGantryShaftBlock.FACING) != attachedShaftDirection
+        ) {
+            reanchorToCurrentShaftBlock();
+            if (attachedShaftPos == null) {
+                detachFromShaft("invalid-shaft-pos");
+                return null;
+            }
+            return measureValidProgressRange();
+        }
+
+        Level lookupLevel = resolveLookupLevel(level);
+        int forward = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection);
+        int backward = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection.getOpposite());
+        return new double[]{-backward, forward};
+    }
+
+    private void reanchorToCurrentShaftBlock() {
+        if (attachedShaftPos == null || attachedShaftDirection == null)
+            return;
+
+        Level lookupLevel = resolveLookupLevel(level);
+        if (lookupLevel == null)
+            return;
+
+        int progressBlocks = (int) Math.round(attachedShaftProgress);
+
+        for (int offset : new int[]{progressBlocks, progressBlocks + 1, progressBlocks - 1}) {
+            BlockPos checkPos = attachedShaftPos.relative(attachedShaftDirection, offset);
+            BlockState state = findAttachedShaftState(checkPos, attachedShaftSubLevelId);
+            if (state == null)
+                state = lookupLevel.getBlockState(checkPos);
+
+            if (state.getBlock() == CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()
+                && state.getValue(PhysicsGantryShaftBlock.FACING) == attachedShaftDirection
+            ) {
+                double blockDelta = (checkPos.getX() - attachedShaftPos.getX()) * attachedShaftDirection.getStepX()
+                    + (checkPos.getY() - attachedShaftPos.getY()) * attachedShaftDirection.getStepY()
+                    + (checkPos.getZ() - attachedShaftPos.getZ()) * attachedShaftDirection.getStepZ();
+
+                double newProgress = attachedShaftProgress - blockDelta;
+
+                if (Math.abs(newProgress) <= 0.5) {
+                    attachedShaftProgress = newProgress;
+                    attachedShaftPos = checkPos.immutable();
+
+                    setChanged();
+                    return;
+                }
+            }
+        }
+
+        clearAttachmentTrackingStateAndRefreshShaft();
     }
 
     private boolean hasValidAttachedShaft(Level lookupLevel) {
