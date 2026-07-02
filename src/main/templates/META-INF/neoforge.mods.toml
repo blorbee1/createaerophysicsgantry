@@ -48,6 +48,6 @@ license="${mod_license}"
 [[dependencies.${mod_id}]]
     modId="aeronautics_bundled"
     type="required"
-    versionRange="*"
+    versionRange="${aeronautics_version_range}"
     ordering="AFTER"
     side="BOTH"
