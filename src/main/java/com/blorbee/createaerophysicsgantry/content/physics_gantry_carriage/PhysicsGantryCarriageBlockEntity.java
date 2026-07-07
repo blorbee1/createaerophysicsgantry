@@ -18,8 +18,7 @@ import dev.ryanhcode.sable.api.SubLevelAssemblyHelper;
 import dev.ryanhcode.sable.api.block.BlockEntitySubLevelActor;
 import dev.ryanhcode.sable.api.physics.PhysicsPipeline;
 import dev.ryanhcode.sable.api.physics.PhysicsPipelineBody;
-import dev.ryanhcode.sable.api.physics.constraint.FixedConstraintConfiguration;
-import dev.ryanhcode.sable.api.physics.constraint.PhysicsConstraintHandle;
+import dev.ryanhcode.sable.api.physics.constraint.*;
 import dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.SableCompanion;
@@ -70,7 +69,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
     private double attachedShaftProgress;
 
-    private PhysicsConstraintHandle shaftConstraintHandle;
+    private GenericConstraintHandle shaftConstraintHandle;
     private Vec3 shaftConstraintWorldAnchor;
 
     private long lastAttachmentTickGameTime = Long.MIN_VALUE;
@@ -210,50 +209,97 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 shaftSubLevel = level;
         }
 
-        Quaterniond orientation = resolveLockedOrientation(subLevel);
-        Vector3d rotationPoint = subLevel.logicalPose().rotationPoint();
-        if (rotationPoint == null)
-            rotationPoint = new Vector3d();
+        if (shaftConstraintHandle != null && shaftConstraintHandle.isValid()) {
+            return;
+        }
 
-        Vector3d targetPosition = computeLockedAttachmentTargetPosition(subLevel, worldAnchor, orientation);
-        if (isFiniteAndSafe(targetPosition.x) && isFiniteAndSafe(targetPosition.y) && isFiniteAndSafe(targetPosition.z)) {
-            boolean hasValidConstraint = shaftConstraintHandle != null && shaftConstraintHandle.isValid();
-            boolean anchorMoved = shaftConstraintWorldAnchor == null || shaftConstraintWorldAnchor.distanceToSqr(worldAnchor) > 1.0E-6;
+        if (shaftConstraintHandle != null)
+            clearShaftConstraint();
 
-            if (!hasValidConstraint || anchorMoved) {
-                if (shaftConstraintHandle != null)
-                    clearShaftConstraint();
+        Quaterniond orientation1 = buildOrientationFromShaftDirection();
+        Quaterniond orientation2 = buildCarriageOrientation(shaftSubLevel, constrainedSubLevel);
 
-                Vector3d pos1 = targetPosition;
-                if (shaftSubLevel != null) {
-                    Vector3d shaftSubPos = shaftSubLevel.logicalPose().position();
-                    Quaterniond shaftSubRotation = shaftSubLevel.logicalPose().orientation();
-                    Vector3d shaftRotPoint = shaftSubLevel.logicalPose().rotationPoint();
+        Vector3d pos1 = computePos1(constrainedSubLevel, shaftSubLevel, worldAnchor, orientation2);
+        Vector3d pos2 = computePos2(constrainedSubLevel, worldAnchor);
+        if (pos1 == null || pos2 == null)
+            return;
 
-                    if (shaftSubPos != null && shaftSubRotation != null && shaftRotPoint != null) {
-                        Vector3d localInShaft = targetPosition.sub(shaftSubPos);
-                        new Quaterniond(shaftSubRotation).conjugate().transform(localInShaft);
-                        localInShaft.add(shaftRotPoint);
-                        pos1 = localInShaft;
-                    }
-                }
+        Set<ConstraintJointAxis> locked = new HashSet<>(Arrays.asList(
+            ConstraintJointAxis.LINEAR_X,
+            ConstraintJointAxis.LINEAR_Y,
+            ConstraintJointAxis.LINEAR_Z,
+            ConstraintJointAxis.ANGULAR_X,
+            ConstraintJointAxis.ANGULAR_Y,
+            ConstraintJointAxis.ANGULAR_Z
+        ));
 
-                Quaterniond constraintOrientation = shaftSubLevel != null ? new Quaterniond() : orientation;
+        GenericConstraintConfiguration config = new GenericConstraintConfiguration(pos1, pos2, orientation1, orientation2, locked);
+        ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
+        if (container == null)
+            return;
 
-                FixedConstraintConfiguration fixedConstraint = new FixedConstraintConfiguration(pos1, rotationPoint, constraintOrientation);
-                ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
-                if (container == null)
-                    return;
+        PhysicsPipeline pipeline = container.physicsSystem().getPipeline();
 
-                SubLevelPhysicsSystem physicsSystem = container.physicsSystem();
-                PhysicsPipeline pipeline = physicsSystem.getPipeline();
+        shaftConstraintHandle = pipeline.addConstraint(
+            shaftSubLevel instanceof ServerSubLevel ssl ? ssl : null,
+            (ServerSubLevel) constrainedSubLevel,
+            config
+        );
+        shaftConstraintWorldAnchor = worldAnchor;
+    }
 
-                ServerSubLevel firstBody = shaftSubLevel instanceof ServerSubLevel ssl ? ssl : null;
+    private Vector3d computePos1(SubLevel constrainedSubLevel, SubLevel shaftSubLevel, Vec3 worldAnchor, Quaterniond carriageOrientation) {
+        Vector3d targetPosition = computeLockedAttachmentTargetPosition(constrainedSubLevel, worldAnchor, carriageOrientation);
+        if (!isFiniteAndSafe(targetPosition.x) || !isFiniteAndSafe(targetPosition.y) || !isFiniteAndSafe(targetPosition.z))
+            return null;
 
-                shaftConstraintHandle = pipeline.addConstraint(firstBody, (ServerSubLevel) constrainedSubLevel, fixedConstraint);
-                shaftConstraintWorldAnchor = worldAnchor;
+        if (shaftSubLevel != null) {
+            Vector3d shaftSubPos = shaftSubLevel.logicalPose().position();
+            Quaterniond shaftSubRotation = shaftSubLevel.logicalPose().orientation();
+            Vector3d shaftRotPoint = shaftSubLevel.logicalPose().rotationPoint();
+
+            if (shaftSubPos != null && shaftSubRotation != null && shaftRotPoint != null) {
+                Vector3d localInShaft = targetPosition.sub(shaftSubPos);
+                new Quaterniond(shaftSubRotation).conjugate().transform(localInShaft);
+                localInShaft.add(shaftRotPoint);
+                return localInShaft;
             }
         }
+
+        return targetPosition;
+    }
+
+    private Vector3d computePos2(SubLevel constrainedSubLevel, Vec3 worldAnchor) {
+        return constrainedSubLevel.logicalPose().rotationPoint();
+    }
+
+    private Quaterniond buildOrientationFromShaftDirection() {
+        if (attachedShaftDirection == null)
+            return new Quaterniond();
+
+        Vector3d xAxis = new Vector3d(
+            attachedShaftDirection.getStepX(),
+            attachedShaftDirection.getStepY(),
+            attachedShaftDirection.getStepZ()
+        ).normalize();
+
+        Vector3d yHint = Math.abs(xAxis.y) < 0.9 ? new Vector3d(0, 1, 0) : new Vector3d(1, 0, 0);
+
+        Vector3d zAxis = new Vector3d(xAxis).cross(yHint).normalize();
+        Vector3d yAxis = new Vector3d(zAxis).cross(xAxis).normalize();
+        Matrix3d basis = new Matrix3d();
+
+        basis.setColumn(0, xAxis);
+        basis.setColumn(1, yAxis);
+        basis.setColumn(2, zAxis);
+
+        return new Quaterniond().setFromNormalized(basis).normalize();
+    }
+
+    private Quaterniond buildCarriageOrientation(SubLevel shaftSubLevel, SubLevel constrainedSubLevel) {
+        if (shaftSubLevel != null)
+            return new Quaterniond();
+        return resolveLockedOrientation(constrainedSubLevel);
     }
 
     private void checkShaftAssemblyAndFollow() {
@@ -866,6 +912,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 !wouldAttachedSubLevelHitAWorldBlock(subLevel, nextProgress, Math.signum(delta));
 
             if (allowMovement) {
+                clearShaftConstraint();
                 attachedShaftProgress = nextProgress;
             } else {
                 resetSubLevelVelocity(subLevel);
