@@ -889,16 +889,15 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             delta = Mth.clamp(convertToLinear(-shaftBe.getSpeed()), -0.49F, 0.49F);
         }
 
-        boolean tryMoving = !shaftState.getValue(PhysicsGantryShaftBlock.POWERED) && delta != 0.0F;
+        boolean shaftPowered = shaftState.getValue(PhysicsGantryShaftBlock.POWERED);
+        boolean tryMoving = !shaftPowered && delta != 0.0F;
+
         if (tryMoving) {
             double[] range = measureValidProgressRange();
             if (range == null) {
                 detachFromShaft("tick-invalid-shaft");
                 return;
             }
-
-//            int forwardSpan = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection);
-//            int backwardSpan = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection.getOpposite());
 
             double nextProgress;
             if (delta > 0) {
@@ -918,10 +917,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         }
 
         applyAttachmentPose(subLevel);
-
-//        if (tryMoving) {
-//            updateTrackedShaftWhileMoving(subLevel);
-//        }
     }
 
     private boolean isSubLevelDockedToExternal(SubLevel subLevel) {
@@ -936,73 +931,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         }
 
         return false;
-    }
-
-    private void updateTrackedShaftWhileMoving(SubLevel subLevel) {
-        if (level == null || subLevel == null)
-            return;
-        if (attachedSubLevelId == null)
-            return;
-
-        BlockState blockState = getBlockState();
-        if (!(blockState.getBlock() instanceof PhysicsGantryCarriageBlock))
-            return;
-
-        Direction carriageFacing = blockState.getValue(PhysicsGantryCarriageBlock.FACING);
-        BlockPos shaftPos = worldPosition.relative(carriageFacing.getOpposite());
-
-        PhysicsGantryShaftBlockEntity shaftBe = level.getBlockEntity(shaftPos) instanceof PhysicsGantryShaftBlockEntity be
-            ? be
-            : SimulatedHelper.findBlockEntityIncludingSubLevels(level, shaftPos, PhysicsGantryShaftBlockEntity.class);
-        if (shaftBe == null) {
-            clearAttachmentTrackingStateAndRefreshShaft();
-            setChanged();
-            return;
-        }
-
-        shaftPos = shaftBe.getBlockPos();
-
-        BlockState shaftState = shaftBe.getBlockState();
-        if (shaftState.getBlock() != CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()) {
-            clearAttachmentTrackingStateAndRefreshShaft();
-            setChanged();
-            return;
-        }
-
-        UUID shaftSubLevelId = SimulatedHelper.getContainingSubLevelId(shaftBe);
-        if (shaftSubLevelId != attachedShaftSubLevelId) {
-            clearAttachmentTrackingStateAndRefreshShaft();
-            setChanged();
-            return;
-        }
-
-        Direction shaftDirection = shaftState.getValue(PhysicsGantryShaftBlock.FACING);
-        if (shaftDirection != attachedShaftDirection) {
-            clearAttachmentTrackingStateAndRefreshShaft();
-            setChanged();
-            return;
-        }
-
-        if (shaftPos.equals(attachedShaftPos))
-            return;
-
-        BlockPos oldShaftPos = attachedShaftPos;
-        BlockPos delta = shaftPos.subtract(oldShaftPos);
-
-        double blockOffset = delta.getX() * attachedShaftDirection.getStepX() +
-            delta.getY() * attachedShaftDirection.getStepY() +
-            delta.getZ() * attachedShaftDirection.getStepZ();
-
-        double oldProgress = attachedShaftProgress;
-        double adjustedProgress = attachedShaftProgress - blockOffset;
-
-        attachedShaftPos = shaftPos.immutable();
-        attachedShaftProgress = adjustedProgress;
-
-        setChanged();
-        sendData();
-//        LOGGER.debug("[PhysicsGantry] updated attachedShaftPos while moving to {} subLevel={} attachedShaftProgress={} oldprogress={}",
-//            shaftPos, attachedShaftSubLevelId, attachedShaftProgress, oldProgress);
     }
 
     private void applyAttachmentPose(SubLevel subLevel) {
