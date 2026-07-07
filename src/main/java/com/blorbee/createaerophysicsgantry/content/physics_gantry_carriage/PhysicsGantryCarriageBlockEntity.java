@@ -18,7 +18,9 @@ import dev.ryanhcode.sable.api.SubLevelAssemblyHelper;
 import dev.ryanhcode.sable.api.block.BlockEntitySubLevelActor;
 import dev.ryanhcode.sable.api.physics.PhysicsPipeline;
 import dev.ryanhcode.sable.api.physics.PhysicsPipelineBody;
-import dev.ryanhcode.sable.api.physics.constraint.*;
+import dev.ryanhcode.sable.api.physics.constraint.GenericConstraintConfiguration;
+import dev.ryanhcode.sable.api.physics.constraint.GenericConstraintHandle;
+import dev.ryanhcode.sable.api.physics.constraint.ConstraintJointAxis;
 import dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.SableCompanion;
@@ -209,18 +211,29 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 shaftSubLevel = level;
         }
 
+        ConstraintJointAxis motorAxis = getConstraintAxis();
+
         if (shaftConstraintHandle != null && shaftConstraintHandle.isValid()) {
+            shaftConstraintHandle.setMotor(
+                motorAxis,
+                attachedShaftProgress,
+                1.0E6,
+                1.0E4,
+                false,
+                0.0
+            );
+            shaftConstraintWorldAnchor = worldAnchor;
             return;
         }
 
         if (shaftConstraintHandle != null)
             clearShaftConstraint();
 
-        Quaterniond orientation1 = buildOrientationFromShaftDirection();
-        Quaterniond orientation2 = buildCarriageOrientation(shaftSubLevel, constrainedSubLevel);
+        Quaterniond orientation1 = new Quaterniond();
+        Quaterniond orientation2 = new Quaterniond();
 
-        Vector3d pos1 = computePos1(constrainedSubLevel, shaftSubLevel, worldAnchor, orientation2);
-        Vector3d pos2 = computePos2(constrainedSubLevel, worldAnchor);
+        Vector3d pos1 = computePos1(constrainedSubLevel, shaftSubLevel, worldAnchor);
+        Vector3d pos2 = computePos2(constrainedSubLevel);
         if (pos1 == null || pos2 == null)
             return;
 
@@ -232,6 +245,8 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             ConstraintJointAxis.ANGULAR_Y,
             ConstraintJointAxis.ANGULAR_Z
         ));
+
+        locked.remove(motorAxis);
 
         GenericConstraintConfiguration config = new GenericConstraintConfiguration(pos1, pos2, orientation1, orientation2, locked);
         ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
@@ -248,8 +263,10 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         shaftConstraintWorldAnchor = worldAnchor;
     }
 
-    private Vector3d computePos1(SubLevel constrainedSubLevel, SubLevel shaftSubLevel, Vec3 worldAnchor, Quaterniond carriageOrientation) {
+    private Vector3d computePos1(SubLevel constrainedSubLevel, SubLevel shaftSubLevel, Vec3 worldAnchor) {
+        Quaterniond carriageOrientation = resolveLockedOrientation(constrainedSubLevel);
         Vector3d targetPosition = computeLockedAttachmentTargetPosition(constrainedSubLevel, worldAnchor, carriageOrientation);
+
         if (!isFiniteAndSafe(targetPosition.x) || !isFiniteAndSafe(targetPosition.y) || !isFiniteAndSafe(targetPosition.z))
             return null;
 
@@ -269,37 +286,19 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         return targetPosition;
     }
 
-    private Vector3d computePos2(SubLevel constrainedSubLevel, Vec3 worldAnchor) {
+    private Vector3d computePos2(SubLevel constrainedSubLevel) {
         return constrainedSubLevel.logicalPose().rotationPoint();
     }
 
-    private Quaterniond buildOrientationFromShaftDirection() {
+    private ConstraintJointAxis getConstraintAxis() {
         if (attachedShaftDirection == null)
-            return new Quaterniond();
+            return ConstraintJointAxis.LINEAR_X;
 
-        Vector3d xAxis = new Vector3d(
-            attachedShaftDirection.getStepX(),
-            attachedShaftDirection.getStepY(),
-            attachedShaftDirection.getStepZ()
-        ).normalize();
-
-        Vector3d yHint = Math.abs(xAxis.y) < 0.9 ? new Vector3d(0, 1, 0) : new Vector3d(1, 0, 0);
-
-        Vector3d zAxis = new Vector3d(xAxis).cross(yHint).normalize();
-        Vector3d yAxis = new Vector3d(zAxis).cross(xAxis).normalize();
-        Matrix3d basis = new Matrix3d();
-
-        basis.setColumn(0, xAxis);
-        basis.setColumn(1, yAxis);
-        basis.setColumn(2, zAxis);
-
-        return new Quaterniond().setFromNormalized(basis).normalize();
-    }
-
-    private Quaterniond buildCarriageOrientation(SubLevel shaftSubLevel, SubLevel constrainedSubLevel) {
-        if (shaftSubLevel != null)
-            return new Quaterniond();
-        return resolveLockedOrientation(constrainedSubLevel);
+        return switch (attachedShaftDirection.getAxis()) {
+            case X -> ConstraintJointAxis.LINEAR_X;
+            case Y -> ConstraintJointAxis.LINEAR_Y;
+            case Z -> ConstraintJointAxis.LINEAR_Z;
+        };
     }
 
     private void checkShaftAssemblyAndFollow() {
@@ -912,7 +911,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 !wouldAttachedSubLevelHitAWorldBlock(subLevel, nextProgress, Math.signum(delta));
 
             if (allowMovement) {
-                clearShaftConstraint();
                 attachedShaftProgress = nextProgress;
             } else {
                 resetSubLevelVelocity(subLevel);
@@ -1450,6 +1448,23 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
     }
 
     private BlockPos resolveDisassemblyGoalBlockPos(SubLevel subLevel) {
+        if (attachedShaftSubLevelId != null) {
+            Vector3d subPos = subLevel.logicalPose().position();
+            Quaterniond subOrient = subLevel.logicalPose().orientation();
+            Vector3d rotPoint = subLevel.logicalPose().rotationPoint();
+
+            if (subPos != null && subOrient != null && rotPoint != null) {
+                Vector3d local = new Vector3d(
+                    worldPosition.getX() + 0.5,
+                    worldPosition.getY() + 0.5,
+                    worldPosition.getZ() + 0.5
+                ).sub(rotPoint);
+                subOrient.transform(local);
+                local.add(subPos);
+                return BlockPos.containing(local.x, local.y, local.z);
+            }
+        }
+
         if (attachedShaftPos != null && attachedShaftDirection != null && attachedCarriageFacing != null) {
             Vec3 baseCenter = Vec3.atCenterOf(attachedShaftPos);
             Vec3 targetCenter = baseCenter.add(
@@ -1458,9 +1473,9 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 attachedShaftDirection.getStepZ() * attachedShaftProgress
             ).add(attachedCarriageFacing.getStepX(), attachedCarriageFacing.getStepY(), attachedCarriageFacing.getStepZ());
             return BlockPos.containing(targetCenter.x, targetCenter.y, targetCenter.z);
-        } else {
-            return nearestGridFromSubLevel(subLevel);
         }
+
+        return nearestGridFromSubLevel(subLevel);
     }
 
     private Quaterniond resolveShaftFrameOrientation() {
