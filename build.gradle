@@ -78,6 +78,7 @@ neoForge {
 
 configurations {
     runtimeClasspath.extendsFrom localRuntime
+    aeronauticsBundle
 }
 
 repositories {
@@ -120,6 +121,31 @@ repositories {
     }
 }
 
+def aeronauticsCompileDir = layout.buildDirectory.dir("generated/aeronautics-compile")
+def extractAeronautics = tasks.register("extractAeronautics") {
+    inputs.files(configurations.aeronauticsBundle)
+    outputs.dir(aeronauticsCompileDir)
+
+    doLast {
+        def output = aeronauticsCompileDir.get().asFile
+        project.delete(output)
+        output.mkdirs()
+
+        configurations.aeronauticsBundle.each { file ->
+            copy {
+                from(zipTree(file)) {
+                    include "META-INF/jarjar/*.jar"
+                    eachFile {
+                        path = name
+                    }
+                    includeEmptyDirs = false
+                }
+                into output
+            }
+        }
+    }
+}
+
 dependencies {
     // Create for NeoForge 1.21.1
     implementation("com.simibubi.create:create-${minecraft_version}:${create_version}:slim") { transitive = false }
@@ -134,11 +160,16 @@ dependencies {
         exclude group: "foundry.veil"
         transitive = false
     }
-    compileOnly name: "simulated-neoforge-${minecraft_version}-${create_simulated_version}"
-    runtimeOnly name: "create-aeronautics-bundled-${minecraft_version}-${create_simulated_version}"
-    //implementation("maven.modrinth:create-aeronautics:${create_simulated_version}+mc${minecraft_version}")
+
+    aeronauticsBundle("maven.modrinth:create-aeronautics:${create_simulated_version}+mc${minecraft_version}")
+    implementation fileTree(dir: aeronauticsCompileDir, include: ["*.jar"]).builtBy(extractAeronautics)
+    runtimeOnly("maven.modrinth:create-aeronautics:${create_simulated_version}+mc${minecraft_version}")
 
     implementation("mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}")
+}
+
+tasks.named("compileJava") {
+    dependsOn(extractAeronautics)
 }
 
 publishing {
