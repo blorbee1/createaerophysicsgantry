@@ -26,6 +26,7 @@ import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.SableCompanion;
 import dev.ryanhcode.sable.companion.math.BoundingBox3i;
 import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
+import dev.ryanhcode.sable.companion.math.Pose3d;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import dev.ryanhcode.sable.sublevel.system.SubLevelPhysicsSystem;
@@ -39,7 +40,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
@@ -60,6 +60,12 @@ import java.util.*;
 public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity implements IDisplayAssemblyExceptions, BlockEntitySubLevelActor {
     private static final Logger LOGGER = LogUtils.getLogger();
 
+    private static final int MOTOR_SIGN = 1;
+    private static final int CONSTRAINT_GRACE_TICKS = 5;
+    private static final int MISSING_SHAFT_GRACE_TICKS = 20;
+
+    private record ShaftRef(PhysicsGantryShaftBlockEntity be, UUID subLevelId, BlockPos pos) {}
+
     private boolean assembledToSubLevel;
 
     private BlockPos attachedShaftPos;
@@ -72,22 +78,15 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
     private double attachedShaftProgress;
 
     private GenericConstraintHandle shaftConstraintHandle;
-    private Vec3 shaftConstraintWorldAnchor;
+    private UUID constraintShaftSubLevelId;
+    private BlockPos constraintShaftPos;
+    private double constraintBaseProgress;
+    private long constraintBuiltTick;
+    private boolean wasMoving;
+    private int missingShaftTicks;
 
     private long lastAttachmentTickGameTime = Long.MIN_VALUE;
     private long lastToggleGameTime = Long.MIN_VALUE;
-
-    private final Quaterniond lockedSubLevelOrientation = new Quaterniond();
-    private boolean hasLockedSubLevelOrientation;
-
-    private final Quaterniond lockedShaftFrameOrientation = new Quaterniond();
-    private boolean hasLockedShaftFrameOrientation;
-
-    private final Vector3d lockedLocalAttachmentAnchor = new Vector3d();
-    private boolean hasLockedLocalAttachmentAnchor;
-
-    private final Vector3d lockedRotationPoint = new Vector3d();
-    private boolean hasLockedRotationPoint;
 
     protected AssemblyException lastException;
 
@@ -99,20 +98,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
     public void addBehaviours(List<BlockEntityBehaviour> behaviours) {
         super.addBehaviours(behaviours);
         registerAwardables(behaviours, AllAdvancements.CONTRAPTION_ACTORS);
-    }
-
-    public void checkValidGantryShaft() {
-        if (assembledToSubLevel && !hasValidAttachedShaft(resolveLookupLevel(level))) {
-            detachFromShaft("check-valid-shaft");
-        }
-    }
-
-    @Override
-    public void initialize() {
-        super.initialize();
-        if (!getBlockState().canSurvive(level, worldPosition)) {
-            level.destroyBlock(worldPosition, true);
-        }
     }
 
     public void forceToggleAssembly() {
@@ -162,25 +147,47 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         if (level == null || level.isClientSide)
             return;
 
-        if (!assembledToSubLevel && attachedSubLevelId == null) {
-            checkShaftAssemblyAndFollow();
+        if (!hasTrackedAttachmentState()) {
+            tickUnassembledCarriage();
+            return;
         }
 
-        SubLevel attachedSubLevel = resolveAttachedSubLevel();
-        if (!assembledToSubLevel
-            && attachedSubLevel != null
-            && attachedShaftPos != null
-            && attachedShaftDirection != null
-            && attachedCarriageFacing != null
-        ) {
+        SubLevel attached = resolveAttachedSubLevel();
+        if (attached == null)
+            return;
+        if (!assembledToSubLevel && attachedShaftPos != null && attachedShaftDirection != null && attachedCarriageFacing != null)
             assembledToSubLevel = true;
+        runAttachmentTick(attached);
+    }
+
+    private void tickUnassembledCarriage() {
+        if (SimulatedHelper.getContainingSubLevel(this) != null)
+            return;
+
+        BlockState state = getBlockState();
+        if (!(state.getBlock() instanceof PhysicsGantryCarriageBlock))
+            return;
+
+        BlockPos shaftPos = worldPosition.relative(state.getValue(PhysicsGantryCarriageBlock.FACING).getOpposite());
+        if (level.getBlockEntity(shaftPos) instanceof PhysicsGantryShaftBlockEntity) {
+            missingShaftTicks = 0; // normal state
+            return;
         }
 
-        if (attachedSubLevel != null
-            && (assembledToSubLevel || attachedShaftPos != null && attachedShaftDirection != null && attachedCarriageFacing != null)
-        ) {
-            runAttachmentTick(attachedSubLevel);
+        PhysicsGantryShaftBlockEntity shaft = SimulatedHelper.findBlockEntityIncludingSubLevels(level, shaftPos, PhysicsGantryShaftBlockEntity.class);
+        if (shaft == null) {
+            // shaft gone everywhere, pop after short grace period
+            if (++missingShaftTicks > MISSING_SHAFT_GRACE_TICKS)
+                level.destroyBlock(worldPosition, true);
+            return;
         }
+        missingShaftTicks = 0;
+
+        // shaft is in a sublevel and we are in the world, we must join with our own sublevel
+        clearAttachmentTrackingState();
+        doSubLevelAssemble();
+        if (!assembledToSubLevel)
+            level.destroyBlock(worldPosition, true); // improper state of carriage
     }
 
     @Override
@@ -192,104 +199,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         }
     }
 
-    private void updateShaftConstraintFromGameTick(SubLevel subLevel, Vec3 worldAnchor) {
-        ServerLevel serverLevel = resolveServerLevel(level);
-        if (serverLevel == null || subLevel == null)
-            return;
-
-        SubLevel constrainedSubLevel = subLevel;
-        if (attachedSubLevelId != null) {
-            SubLevel preferredSubLevel = SubLevelBlockEntityCollector.getSubLevel(serverLevel, attachedSubLevelId);
-            if (preferredSubLevel != null)
-                constrainedSubLevel = preferredSubLevel;
-        }
-
-        SubLevel shaftSubLevel = null;
-        if (attachedShaftSubLevelId != null) {
-            SubLevel level = SubLevelBlockEntityCollector.getSubLevel(serverLevel, attachedShaftSubLevelId);
-            if (level != null)
-                shaftSubLevel = level;
-        }
-
-        ConstraintJointAxis motorAxis = getConstraintAxis();
-
-        if (shaftConstraintHandle != null && shaftConstraintHandle.isValid()) {
-            shaftConstraintHandle.setMotor(
-                motorAxis,
-                attachedShaftProgress,
-                1.0E6,
-                1.0E4,
-                false,
-                0.0
-            );
-            shaftConstraintWorldAnchor = worldAnchor;
-            return;
-        }
-
-        if (shaftConstraintHandle != null)
-            clearShaftConstraint();
-
-        Quaterniond orientation1 = new Quaterniond();
-        Quaterniond orientation2 = new Quaterniond();
-
-        Vector3d pos1 = computePos1(constrainedSubLevel, shaftSubLevel, worldAnchor);
-        Vector3d pos2 = computePos2(constrainedSubLevel);
-        if (pos1 == null || pos2 == null)
-            return;
-
-        Set<ConstraintJointAxis> locked = new HashSet<>(Arrays.asList(
-            ConstraintJointAxis.LINEAR_X,
-            ConstraintJointAxis.LINEAR_Y,
-            ConstraintJointAxis.LINEAR_Z,
-            ConstraintJointAxis.ANGULAR_X,
-            ConstraintJointAxis.ANGULAR_Y,
-            ConstraintJointAxis.ANGULAR_Z
-        ));
-
-        locked.remove(motorAxis);
-
-        GenericConstraintConfiguration config = new GenericConstraintConfiguration(pos1, pos2, orientation1, orientation2, locked);
-        ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
-        if (container == null)
-            return;
-
-        PhysicsPipeline pipeline = container.physicsSystem().getPipeline();
-
-        shaftConstraintHandle = pipeline.addConstraint(
-            shaftSubLevel instanceof ServerSubLevel ssl ? ssl : null,
-            (ServerSubLevel) constrainedSubLevel,
-            config
-        );
-        shaftConstraintWorldAnchor = worldAnchor;
-    }
-
-    private Vector3d computePos1(SubLevel constrainedSubLevel, SubLevel shaftSubLevel, Vec3 worldAnchor) {
-        Quaterniond carriageOrientation = resolveLockedOrientation(constrainedSubLevel);
-        Vector3d targetPosition = computeLockedAttachmentTargetPosition(constrainedSubLevel, worldAnchor, carriageOrientation);
-
-        if (!isFiniteAndSafe(targetPosition.x) || !isFiniteAndSafe(targetPosition.y) || !isFiniteAndSafe(targetPosition.z))
-            return null;
-
-        if (shaftSubLevel != null) {
-            Vector3d shaftSubPos = shaftSubLevel.logicalPose().position();
-            Quaterniond shaftSubRotation = shaftSubLevel.logicalPose().orientation();
-            Vector3d shaftRotPoint = shaftSubLevel.logicalPose().rotationPoint();
-
-            if (shaftSubPos != null && shaftSubRotation != null && shaftRotPoint != null) {
-                Vector3d localInShaft = targetPosition.sub(shaftSubPos);
-                new Quaterniond(shaftSubRotation).conjugate().transform(localInShaft);
-                localInShaft.add(shaftRotPoint);
-                return localInShaft;
-            }
-        }
-
-        return targetPosition;
-    }
-
-    private Vector3d computePos2(SubLevel constrainedSubLevel) {
-        return constrainedSubLevel.logicalPose().rotationPoint();
-    }
-
     private ConstraintJointAxis getConstraintAxis() {
         if (attachedShaftDirection == null)
             return ConstraintJointAxis.LINEAR_X;
@@ -299,34 +208,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             case Y -> ConstraintJointAxis.LINEAR_Y;
             case Z -> ConstraintJointAxis.LINEAR_Z;
         };
-    }
-
-    private void checkShaftAssemblyAndFollow() {
-        if (level == null)
-            return;
-        if (assembledToSubLevel)
-            return;
-        if (SimulatedHelper.getContainingSubLevel(this) != null)
-            return;
-
-        BlockState blockState = getBlockState();
-        if (!(blockState.getBlock() instanceof PhysicsGantryCarriageBlock))
-            return;
-
-        Direction carriageFacing = blockState.getValue(PhysicsGantryShaftBlock.FACING);
-        BlockPos shaftPos = worldPosition.relative(carriageFacing.getOpposite());
-
-        if (level.getBlockEntity(shaftPos) instanceof PhysicsGantryShaftBlockEntity)
-            return;
-
-        PhysicsGantryShaftBlockEntity shaftBe = SimulatedHelper.findBlockEntityIncludingSubLevels(level, shaftPos,
-            PhysicsGantryShaftBlockEntity.class);
-        if (shaftBe == null)
-            return;
-
-        //LOGGER.info("[PhysicsGantry] shaft assembled into sublevel, auto-assembling carriage at {}", worldPosition);
-        clearAttachmentTrackingState();
-        doSubLevelAssemble();
     }
 
     @Override
@@ -560,23 +441,8 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         this.attachedSubLevelId = subLevelId;
         this.attachedShaftSubLevelId = shaftSubLevelId;
         this.attachedShaftProgress = 0.0;
-        this.hasLockedSubLevelOrientation = false;
-        this.lockedSubLevelOrientation.identity();
-        this.hasLockedShaftFrameOrientation = false;
-        this.lockedShaftFrameOrientation.identity();
-        this.hasLockedLocalAttachmentAnchor = false;
-        this.lockedLocalAttachmentAnchor.set(0.0, 0.0, 0.0);
-        this.hasLockedRotationPoint = false;
-        this.lockedRotationPoint.set(0.0, 0.0, 0.0);
-        this.shaftConstraintWorldAnchor = null;
+        this.wasMoving = false;
         this.lastException = null;
-    }
-
-    public void updateAttachmentShaftPosition(BlockPos newShaftPos) {
-        if (assembledToSubLevel && newShaftPos != null) {
-            attachedShaftPos = newShaftPos.immutable();
-            setChanged();
-        }
     }
 
     public boolean isAssembledToSubLevel() {
@@ -673,7 +539,6 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         if (disassembledCarriage != null) {
             disassembledCarriage.clearAttachmentTrackingState();
             disassembledCarriage.scrubKineticLinksAfterAttachmentTeardown(previousShaftPos);
-            disassembledCarriage.refreshShaftAnchorLookup(previousShaftPos);
             disassembledCarriage.setChanged();
             disassembledCarriage.sendData();
         }
@@ -721,6 +586,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
     }
 
     private void clearAttachmentTrackingState() {
+        clearShaftConstraint();
         assembledToSubLevel = false;
         attachedShaftPos = null;
         attachedShaftDirection = null;
@@ -728,23 +594,15 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         attachedSubLevelId = null;
         attachedShaftSubLevelId = null;
         attachedShaftProgress = 0.0;
-        shaftConstraintWorldAnchor = null;
-        hasLockedSubLevelOrientation = false;
-        lockedSubLevelOrientation.identity();
-        hasLockedShaftFrameOrientation = false;
-        lockedShaftFrameOrientation.identity();
-        hasLockedLocalAttachmentAnchor = false;
-        lockedLocalAttachmentAnchor.set(0.0, 0.0, 0.0);
-        hasLockedRotationPoint = false;
-        lockedRotationPoint.set(0.0, 0.0, 0.0);
         lastAttachmentTickGameTime = Long.MIN_VALUE;
+        wasMoving = false;
+        missingShaftTicks = 0;
     }
 
     private void clearAttachmentTrackingStateAndRefreshShaft() {
         BlockPos previousShaftPos = attachedShaftPos;
         clearAttachmentTrackingState();
         scrubKineticLinksAfterAttachmentTeardown(previousShaftPos);
-        refreshShaftAnchorLookup(previousShaftPos);
     }
 
     private void scrubKineticLinksAfterAttachmentTeardown(BlockPos shaftPos) {
@@ -776,19 +634,8 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         }
     }
 
-    private void refreshShaftAnchorLookup(BlockPos shaftPos) {
-        if (shaftPos != null && level != null) {
-            Level lookup = resolveLookupLevel(level);
-            PhysicsGantryShaftBlockEntity shaft = SimulatedHelper.findBlockEntityIncludingSubLevels(lookup,
-                shaftPos, PhysicsGantryShaftBlockEntity.class);
-            if (shaft != null) {
-                shaft.refreshCarriageAnchorLookup();
-            }
-        }
-    }
-
     public boolean hasActiveAttachmentAnchor() {
-        return assembledToSubLevel || shaftConstraintHandle != null || shaftConstraintWorldAnchor != null || hasLockedLocalAttachmentAnchor;
+        return assembledToSubLevel || shaftConstraintHandle != null;
     }
 
     public BlockPos getAttachedShaftPos() {
@@ -818,235 +665,33 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         }
     }
 
-    private void tickAttachedSubLevelMovement(SubLevel subLevel) {
-        ServerLevel lookupLevel = resolveServerLevel(level);
-        if (lookupLevel == null)
-            return;
-        if (!hasTrackedAttachmentState())
-            return;
-
-        PhysicsGantryShaftBlockEntity shaftBe = findAttachedShaftEntity(attachedShaftPos, attachedShaftSubLevelId);
-        UUID currentShaftSubLevelId = shaftBe == null ? null : SimulatedHelper.getContainingSubLevelId(shaftBe);
-
-        if (!Objects.equals(currentShaftSubLevelId, attachedShaftSubLevelId)) {
-            if (currentShaftSubLevelId == null && shaftBe == null && attachedShaftSubLevelId != null) {
-                detachFromShaft("shaft-sublevel-destroyed");
-                return;
-            }
-
-            attachedShaftSubLevelId = currentShaftSubLevelId;
-
-            if (currentShaftSubLevelId == null) {
-                // shaft returned to world space
-                Vector3d subPos = subLevel.logicalPose().position();
-                Quaterniond subRotation = subLevel.logicalPose().orientation();
-                Vector3d rotPoint = subLevel.logicalPose().rotationPoint();
-
-                if (subPos != null && subRotation != null && rotPoint != null && attachedCarriageFacing != null) {
-                    Vector3d local = new Vector3d(
-                        worldPosition.getX() + 0.5,
-                        worldPosition.getY() + 0.5,
-                        worldPosition.getZ() + 0.5
-                    ).sub(rotPoint);
-
-                    subRotation.transform(local);
-                    local.add(subPos);
-
-                    Direction shaftDir = attachedCarriageFacing.getOpposite();
-                    attachedShaftPos = BlockPos.containing(
-                        local.x + shaftDir.getStepX(),
-                        local.y + shaftDir.getStepY(),
-                        local.z + shaftDir.getStepZ()
-                    ).immutable();
-                }
-            } else {
-                // shaft entered a sublevel
-                attachedShaftPos = shaftBe.getBlockPos().immutable();
-            }
-
-            hasLockedLocalAttachmentAnchor = false;
-            hasLockedShaftFrameOrientation = false;
-            hasLockedSubLevelOrientation = false;
-            clearShaftConstraint();
-            setChanged();
-        }
-
-//        if (!hasValidAttachedShaft(lookupLevel)) {
-//            detachFromShaft("tick-invalid-shaft");
-//            return;
-//        }
-        if (measureValidProgressRange() == null) {
-            detachFromShaft("tick-invalid-shaft");
-            return;
-        }
-
-        if (shaftBe == null)
-            return;
-
-        BlockState shaftState = shaftBe.getBlockState();
-        float delta = shaftBe.getPinionMovementSpeed();
-        if (delta == 0.0F && Math.abs(shaftBe.getSpeed()) > 1.0E-4F) {
-            delta = Mth.clamp(convertToLinear(-shaftBe.getSpeed()), -0.49F, 0.49F);
-        }
-
-        boolean shaftPowered = shaftState.getValue(PhysicsGantryShaftBlock.POWERED);
-        boolean tryMoving = !shaftPowered && delta != 0.0F;
-
-        if (tryMoving) {
-            double[] range = measureValidProgressRange();
-            if (range == null) {
-                detachFromShaft("tick-invalid-shaft");
-                return;
-            }
-
-            double nextProgress;
-            if (delta > 0) {
-                nextProgress = Math.min(attachedShaftProgress + delta, range[1]);
-            } else {
-                nextProgress = Math.max(attachedShaftProgress + delta, range[0]);
-            }
-
-            boolean allowMovement = !isSubLevelDockedToExternal(subLevel) &&
-                !wouldAttachedSubLevelHitAWorldBlock(subLevel, nextProgress, Math.signum(delta));
-
-            if (allowMovement) {
-                attachedShaftProgress = nextProgress;
-            } else {
-                resetSubLevelVelocity(subLevel);
-            }
-        }
-
-        applyAttachmentPose(subLevel);
-    }
-
     private boolean isSubLevelDockedToExternal(SubLevel subLevel) {
         if (subLevel == null)
             return false;
-
         for (BlockEntity be : SubLevelBlockEntityCollector.getBlockEntities(subLevel)) {
-            if (be instanceof DockingConnectorBlockEntity connector) {
-                if (connector.isLocked())
-                    return true;
-            }
-        }
-
-        return false;
-    }
-
-    private void applyAttachmentPose(SubLevel subLevel) {
-        if (subLevel != null && attachedShaftPos != null && attachedShaftDirection != null && attachedCarriageFacing != null) {
-            PhysicsGantryShaftBlockEntity shaftBe = findAttachedShaftEntity(attachedShaftPos, attachedShaftSubLevelId);
-            if (shaftBe == null)
-                return;
-
-            Vec3 shaftDirectionLocal = Vec3.atLowerCornerOf(attachedShaftDirection.getNormal());
-            Vec3 carriageFacingLocal = Vec3.atLowerCornerOf(attachedCarriageFacing.getNormal());
-
-            Vec3 shaftCenter = Vec3.atCenterOf(attachedShaftPos);
-
-            SubLevel shaftSubLevel = SimulatedHelper.getContainingSubLevel(shaftBe);
-            if (shaftSubLevel != null) {
-                Vector3d subPos = shaftSubLevel.logicalPose().position();
-                Quaterniond subRotation = shaftSubLevel.logicalPose().orientation();
-                Vector3d rotPoint = shaftSubLevel.logicalPose().rotationPoint();
-                if (subPos != null && subRotation != null && rotPoint != null) {
-                    BlockPos shaftPlotPos = shaftBe.getBlockPos();
-
-                    Vector3d local = new Vector3d(
-                        shaftPlotPos.getX() + 0.5 + shaftDirectionLocal.x * attachedShaftProgress + carriageFacingLocal.x * 0.5,
-                        shaftPlotPos.getY() + 0.5 + shaftDirectionLocal.y * attachedShaftProgress + carriageFacingLocal.y * 0.5,
-                        shaftPlotPos.getZ() + 0.5 + shaftDirectionLocal.z * attachedShaftProgress + carriageFacingLocal.z * 0.5
-                    ).sub(rotPoint);
-
-                    subRotation.transform(local);
-                    local.add(subPos);
-
-                    Vec3 worldAnchor = new Vec3(local.x, local.y, local.z);
-                    updateShaftConstraintFromGameTick(subLevel, worldAnchor);
-                    return;
-                }
-            }
-
-            Vec3 localAnchorWorld = shaftCenter
-                .add(shaftDirectionLocal.x * attachedShaftProgress,
-                    shaftDirectionLocal.y * attachedShaftProgress,
-                    shaftDirectionLocal.z * attachedShaftProgress
-                )
-                .add(carriageFacingLocal.x * 0.5,
-                    carriageFacingLocal.y * 0.5,
-                    carriageFacingLocal.z * 0.5);
-
-            Vec3 worldAnchor = SimulatedHelper.toContainingWorldPosition(shaftBe, localAnchorWorld);
-            updateShaftConstraintFromGameTick(subLevel, worldAnchor);
-        }
-    }
-
-    private boolean wouldAttachedSubLevelHitAWorldBlock(SubLevel subLevel, double progress, float movementSign) {
-        if (subLevel != null && attachedShaftPos != null && attachedShaftDirection != null && attachedCarriageFacing != null) {
-            PhysicsGantryShaftBlockEntity shaftBe = findAttachedShaftEntity(attachedShaftPos, attachedShaftSubLevelId);
-            if (shaftBe == null)
+            if (be instanceof DockingConnectorBlockEntity connector && connector.isLocked())
                 return true;
-
-            double fromProgress = attachedShaftProgress;
-            double toProgress = progress;
-            double step = 0.25 * movementSign;
-
-            if (step == 0) {
-                step = toProgress > fromProgress ? 0.25 : -0.25;
-            }
-
-            Quaterniond orientation = resolveLockedOrientation(subLevel);
-
-            double current = fromProgress;
-            boolean done = false;
-            while (!done) {
-                if (movementSign > 0) {
-                    current = Math.min(current + Math.abs(step), toProgress);
-                    done = current >= toProgress;
-                } else {
-                    current = Math.max(current - Math.abs(step), toProgress);
-                    done = current <= toProgress;
-                }
-
-                Vec3 worldAnchor = computeAttachmentWorldAnchor(shaftBe, current);
-                if (worldAnchor == null)
-                    return true;
-
-                Vector3d targetPosition = computeLockedAttachmentTargetPosition(subLevel, worldAnchor, orientation);
-                if (wouldSubLevelHitAWorldBlock(subLevel, targetPosition, orientation, movementSign))
-                    return true;
-            }
         }
-
         return false;
     }
 
-    private Vec3 computeAttachmentWorldAnchor(PhysicsGantryShaftBlockEntity shaftBe, double progress) {
-        Vec3 shaftDirectionLocal = Vec3.atLowerCornerOf(attachedShaftDirection.getNormal());
-        Vec3 carriageFacingLocal = Vec3.atLowerCornerOf(attachedCarriageFacing.getNormal());
-        Vec3 localAnchor = Vec3.atCenterOf(attachedShaftPos)
-            .add(shaftDirectionLocal.x * progress, shaftDirectionLocal.y * progress, shaftDirectionLocal.z * progress)
-            .add(carriageFacingLocal.x * 0.5, carriageFacingLocal.y * 0.5, carriageFacingLocal.z * 0.5);
-        return SimulatedHelper.toContainingWorldPosition(shaftBe, localAnchor);
+    private int[] getSubLevelBlockBounds(SubLevel subLevel) {
+        BoundingBox3ic bounds = subLevel.getPlot().getBoundingBox();
+        int minX = bounds.minX(), minY = bounds.minY(), minZ = bounds.minZ();
+        int maxX = bounds.maxX(), maxY = bounds.maxY(), maxZ = bounds.maxZ();
+        return maxX >= minX && maxY >= minY && maxZ >= minZ ? new int[]{minX, minY, minZ, maxX, maxY, maxZ} : null;
     }
 
-    private boolean wouldSubLevelHitAWorldBlock(SubLevel subLevel, Vector3dc targetPosition, Quaterniond orientation, float movementSign) {
+    private boolean wouldDisassemblyOverwriteProtectedWorldBlock(SubLevel subLevel, BlockPos anchor, BlockPos goal) {
         ServerLevel serverLevel = resolveServerLevel(level);
-        if (serverLevel == null || subLevel == null || targetPosition == null || orientation == null)
-            return true;
+        if (serverLevel == null || subLevel == null || anchor == null || goal == null)
+            return false;
 
         int[] bounds = getSubLevelBlockBounds(subLevel);
         if (bounds == null)
             return true;
 
-        Vector3d rotationPoint = subLevel.logicalPose().rotationPoint();
-        if (rotationPoint == null)
-            rotationPoint = new Vector3d();
-
-        double faceOffsetX = attachedShaftDirection.getStepX() * 0.5 * movementSign;
-        double faceOffsetY = attachedShaftDirection.getStepY() * 0.5 * movementSign;
-        double faceOffsetZ = attachedShaftDirection.getStepZ() * 0.5 * movementSign;
-
+        BlockPos offset = goal.subtract(anchor);
         for (int x = bounds[0]; x <= bounds[3]; x++) {
             for (int y = bounds[1]; y <= bounds[4]; y++) {
                 for (int z = bounds[2]; z <= bounds[5]; z++) {
@@ -1054,83 +699,190 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                     BlockState payloadState = serverLevel.getBlockState(localPos);
                     if (payloadState.isAir())
                         continue;
-                    if (isAWorldBlock(serverLevel, localPos, payloadState))
+                    if (isProtectedWorldBlock(serverLevel, localPos, payloadState))
                         return true;
 
-                    BlockPos targetCenter = transformSubLevelBlockToWorld(localPos, rotationPoint, targetPosition, orientation);
-                    if (isAWorldBlock(serverLevel, targetCenter, serverLevel.getBlockState(targetCenter)))
-                        return true;
-
-                    Vector3d leadingFaceLocal = new Vector3d(
-                        localPos.getX() + 0.5 + faceOffsetX,
-                        localPos.getY() + 0.5 + faceOffsetY,
-                        localPos.getZ() + 0.5 + faceOffsetZ
-                    ).sub(rotationPoint);
-
-                    new Quaterniond(orientation).transform(leadingFaceLocal);
-                    leadingFaceLocal.add(targetPosition);
-
-                    BlockPos leadingFaceWorld = BlockPos.containing(leadingFaceLocal.x, leadingFaceLocal.y, leadingFaceLocal.z);
-                    if (isAWorldBlock(serverLevel, leadingFaceWorld, serverLevel.getBlockState(leadingFaceWorld)))
+                    BlockPos targetPos = localPos.offset(offset);
+                    if (isProtectedWorldBlock(serverLevel, targetPos, serverLevel.getBlockState(targetPos)))
                         return true;
                 }
             }
         }
-
         return false;
     }
 
-    private boolean wouldDisassemblyOverwriteProtectedWorldBlock(SubLevel subLevel, BlockPos anchor, BlockPos goal) {
+    private void tickAttachedSubLevelMovement(SubLevel subLevel) {
         ServerLevel serverLevel = resolveServerLevel(level);
-        if (serverLevel != null && subLevel != null && anchor != null && goal != null) {
-            int[] bounds = getSubLevelBlockBounds(subLevel);
-            if (bounds == null)
-                return true;
+        if (serverLevel == null || !(subLevel instanceof ServerSubLevel carriageSubLevel) || !hasTrackedAttachmentState())
+            return;
 
-            BlockPos offset = goal.subtract(anchor);
-            for (int x = bounds[0]; x <= bounds[3]; x++) {
-                for (int y = bounds[1]; y <= bounds[4]; y++) {
-                    for (int z = bounds[2]; z <= bounds[5]; z++) {
-                        BlockPos localPos = new BlockPos(x, y, z);
-                        BlockState payloadState = serverLevel.getBlockState(localPos);
-
-                        if (!payloadState.isAir()) {
-                            if (isProtectedWorldBlock(serverLevel, localPos, payloadState))
-                                return true;
-
-                            BlockPos targetPos = localPos.offset(offset);
-                            BlockState targetState = serverLevel.getBlockState(targetPos);
-                            if (isProtectedWorldBlock(serverLevel, targetPos, targetState))
-                                return true;
-                        }
-                    }
-                }
-            }
-
-            return false;
-        } else {
-            return false;
+        ShaftRef shaft = resolveShaft(serverLevel, carriageSubLevel);
+        if (shaft == null) {
+            if (++missingShaftTicks > MISSING_SHAFT_GRACE_TICKS)
+                detachFromShaft("shaft-missing");
+            return;
         }
+        missingShaftTicks = 0;
+
+        if (shaft.subLevelId() != null && shaft.subLevelId().equals(carriageSubLevel.getUniqueId()))
+            return;
+
+        double[] range = measureProgressRange(serverLevel);
+        double before = attachedShaftProgress;
+
+        if (!shaft.be().getBlockState().getValue(PhysicsGantryShaftBlock.POWERED) && !isSubLevelDockedToExternal(carriageSubLevel)) {
+            float delta = shaft.be().getPinionMovementSpeed();
+            if (delta != 0.0f) {
+                attachedShaftProgress = Math.clamp(attachedShaftProgress + delta, range[0], range[1]);
+            }
+        }
+
+        boolean moving = attachedShaftProgress != before;
+        if (moving)
+            setChanged();
+
+        driveConstraint(serverLevel, carriageSubLevel, shaft);
+        if (moving && !wasMoving)
+            wakeBody(serverLevel, carriageSubLevel);
+        wasMoving = moving;
     }
 
-    private BlockPos transformSubLevelBlockToWorld(BlockPos localPos, Vector3dc rotationPoint, Vector3dc targetPosition, Quaterniondc orientation) {
-        Vector3d local = new Vector3d(
-            localPos.getX() + 0.5 - rotationPoint.x(), localPos.getY() + 0.5 - rotationPoint.y(), localPos.getZ() + 0.5 - rotationPoint.z()
+    private ShaftRef resolveShaft(ServerLevel serverLevel, ServerSubLevel subLevel) {
+        // where we last saw it
+        if (attachedShaftPos != null) {
+            PhysicsGantryShaftBlockEntity be = attachedShaftSubLevelId != null
+                ? SimulatedHelper.findBlockEntity(serverLevel, attachedShaftSubLevelId, attachedShaftPos, PhysicsGantryShaftBlockEntity.class)
+                : (serverLevel.getBlockEntity(attachedShaftPos) instanceof PhysicsGantryShaftBlockEntity s ? s : null);
+            if (be != null && isMatchingShaft(be.getBlockState()))
+                return new ShaftRef(be, attachedShaftSubLevelId, attachedShaftPos);
+        }
+
+        // shaft moved between world and sublevel? find again
+        if (attachedCarriageFacing == null)
+            return null;
+
+        Pose3d pose = subLevel.logicalPose();
+        Vec3 carriageCenter = pose.transformPosition(Vec3.atCenterOf(worldPosition));
+        Vec3 facingWorld = pose.transformNormal(Vec3.atLowerCornerOf(attachedCarriageFacing.getNormal()));
+
+        PhysicsGantryShaftBlockEntity be = SimulatedHelper.findBlockEntityAtWorldPoint(serverLevel, carriageCenter.subtract(facingWorld), PhysicsGantryShaftBlockEntity.class);
+        if (be == null || be.getBlockState().getBlock() != CAPGBlocks.PHYSICS_GANTRY_SHAFT.get())
+            return null;
+
+        Direction newDir = be.getBlockState().getValue(PhysicsGantryShaftBlock.FACING);
+        Vec3 shaftCenterWorld = SimulatedHelper.toContainingWorldPosition(be, Vec3.atCenterOf(be.getBlockPos()));
+        Vec3 dirWorld = SimulatedHelper.toContainingWorldDirection(be, Vec3.atLowerCornerOf(newDir.getNormal()));
+
+        attachedShaftSubLevelId = SimulatedHelper.getContainingSubLevelId(be);
+        attachedShaftPos = be.getBlockPos().immutable();
+        attachedShaftDirection = newDir;
+        attachedShaftProgress = carriageCenter.subtract(shaftCenterWorld).dot(dirWorld);
+        clearShaftConstraint();
+        setChanged();
+        return new ShaftRef(be, attachedShaftSubLevelId, attachedShaftPos);
+    }
+
+    private boolean isMatchingShaft(BlockState state) {
+        return state.getBlock() == CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()
+            && state.getValue(PhysicsGantryShaftBlock.FACING) == attachedShaftDirection;
+    }
+
+    private double[] measureProgressRange(ServerLevel serverLevel) {
+        return new double[] {
+            -measureShaftSpan(serverLevel, attachedShaftDirection.getOpposite()),
+            measureShaftSpan(serverLevel, attachedShaftDirection)
+        };
+    }
+
+    private void driveConstraint(ServerLevel serverLevel, ServerSubLevel subLevel, ShaftRef shaft) {
+        if (shaftConstraintHandle != null) {
+            boolean sameShaft = Objects.equals(constraintShaftSubLevelId, shaft.subLevelId())
+                && Objects.equals(constraintShaftPos, shaft.pos());
+            if (!sameShaft) {
+                clearShaftConstraint();
+            } else if (!shaftConstraintHandle.isValid()) {
+                if (serverLevel.getGameTime() - constraintBuiltTick < CONSTRAINT_GRACE_TICKS)
+                    return;
+                clearShaftConstraint();
+            }
+        }
+
+        if (shaftConstraintHandle == null && !buildConstraint(serverLevel, subLevel, shaft))
+            return;
+        shaftConstraintHandle.setMotor(getConstraintAxis(), motorTarget(), 1.0E6, 1.0E4, false, 0.0);
+    }
+
+    private boolean buildConstraint(ServerLevel serverLevel, ServerSubLevel subLevel, ShaftRef shaft) {
+        ServerSubLevel shaftSubLevel = null;
+        if (shaft.subLevelId() != null) {
+            if (!(SubLevelBlockEntityCollector.getSubLevel(serverLevel, shaft.subLevelId()) instanceof ServerSubLevel s))
+                return false;
+            shaftSubLevel = s;
+        }
+
+        ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
+        if (container == null)
+            return false;
+
+        Pose3d carriagePose = subLevel.logicalPose();
+        Vector3d com = new Vector3d(carriagePose.position());
+        Vector3d pos1 = new Vector3d(com);
+        Quaterniond shaftQ = new Quaterniond();
+
+        if (shaftSubLevel != null) {
+            Vec3 local = SimulatedHelper.toContainingLocalPosition(shaftSubLevel, new Vec3(com.x, com.y, com.z));
+            if (local == null)
+                return false;
+            pos1.set(local.x, local.y, local.z);
+            shaftQ.set(shaftSubLevel.logicalPose().orientation());
+        }
+        Vector3d pos2 = new Vector3d(carriagePose.rotationPoint());
+
+        if (!isFiniteAndSafe(pos1.x) || !isFiniteAndSafe(pos1.y) || !isFiniteAndSafe(pos1.z))
+            return false;
+
+        Quaterniond orientation1 = new Quaterniond();
+        Quaterniond orientation2 = new Quaterniond(carriagePose.orientation()).conjugate().mul(shaftQ).normalize();
+
+        Set<ConstraintJointAxis> locked = EnumSet.of(
+            ConstraintJointAxis.LINEAR_X,
+            ConstraintJointAxis.LINEAR_Y,
+            ConstraintJointAxis.LINEAR_Z,
+            ConstraintJointAxis.ANGULAR_X,
+            ConstraintJointAxis.ANGULAR_Y,
+            ConstraintJointAxis.ANGULAR_Z
         );
-        orientation.transform(local);
-        local.add(targetPosition);
-        return BlockPos.containing(local.x, local.y, local.z);
+        locked.remove(getConstraintAxis());
+
+        GenericConstraintConfiguration config = new GenericConstraintConfiguration(
+            pos1, pos2,
+            orientation1, orientation2,
+            locked
+        );
+        GenericConstraintHandle handle = container.physicsSystem().getPipeline().addConstraint(shaftSubLevel, subLevel, config);
+        if (handle == null)
+            return false;
+
+        handle.setContactsEnabled(false);
+
+        shaftConstraintHandle = handle;
+        constraintShaftSubLevelId = shaft.subLevelId();
+        constraintShaftPos = shaft.pos();
+        constraintBaseProgress = attachedShaftProgress;
+        constraintBuiltTick = serverLevel.getGameTime();
+        return true;
     }
 
-    private int[] getSubLevelBlockBounds(SubLevel subLevel) {
-        BoundingBox3ic bounds = subLevel.getPlot().getBoundingBox();
-        int minX = bounds.minX();
-        int minY = bounds.minY();
-        int minZ = bounds.minZ();
-        int maxX = bounds.maxX();
-        int maxY = bounds.maxY();
-        int maxZ = bounds.maxZ();
-        return maxX >= minX && maxY >= minY && maxZ >= minZ ? new int[]{minX, minY, minZ, maxX, maxY, maxZ} : null;
+    private double motorTarget() {
+        if (attachedShaftDirection == null)
+            return 0.0;
+        return (attachedShaftProgress - constraintBaseProgress) * attachedShaftDirection.getAxisDirection().getStep() * MOTOR_SIGN;
+    }
+
+    private void wakeBody(ServerLevel serverLevel, ServerSubLevel subLevel) {
+        ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
+        if (container != null)
+            container.physicsSystem().getPipeline().resetVelocity(subLevel);
     }
 
     private boolean isProtectedWorldBlock(Level chunkLevel, BlockPos pos, BlockState state) {
@@ -1143,7 +895,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
     public void detachFromShaft(String reason) {
         if (level != null && !level.isClientSide) {
-            if (hasTrackedAttachmentState() || shaftConstraintHandle != null || shaftConstraintWorldAnchor != null) {
+            if (hasTrackedAttachmentState() || shaftConstraintHandle != null) {
                 clearShaftConstraint();
 
                 SubLevel carriageSubLevel = resolveAttachedSubLevel();
@@ -1186,166 +938,25 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         }
     }
 
-    private Vec3 toSubLevelLocalAnchor(SubLevel subLevel, Vec3 worldAnchor) {
-        Vector3d position = subLevel.logicalPose().position();
-        Quaterniond orientation = subLevel.logicalPose().orientation();
-        if (position != null && orientation != null) {
-            Vector3d local = new Vector3d(worldAnchor.x, worldAnchor.y, worldAnchor.z).sub(position);
-            new Quaterniond(orientation).conjugate().transform(local);
-            return new Vec3(local.x, local.y, local.z);
-        } else {
-            return Vec3.ZERO;
-        }
-    }
-
     private void clearShaftConstraint() {
-        if (shaftConstraintHandle != null) {
+        if (shaftConstraintHandle != null)
             shaftConstraintHandle.remove();
-        }
         shaftConstraintHandle = null;
-        shaftConstraintWorldAnchor = null;
+        constraintShaftSubLevelId = null;
+        constraintShaftPos = null;
+        constraintBaseProgress = 0.0;
     }
 
-    private int measureShaftSpan(Level lookupLevel, BlockPos origin, Direction direction) {
-        int distance = 0;
-        BlockPos cursor = origin;
-
-        while (true) {
+    private int measureShaftSpan(ServerLevel level, Direction direction) {
+        BlockPos cursor = attachedShaftPos;
+        int n = 0;
+        while (n < 256) {
             cursor = cursor.relative(direction);
-            BlockState state = findAttachedShaftState(cursor, attachedShaftSubLevelId);
-            if (state == null)
-                state = lookupLevel.getBlockState(cursor);
-
-            if (state.getBlock() != CAPGBlocks.PHYSICS_GANTRY_SHAFT.get() || state.getValue(PhysicsGantryShaftBlock.FACING) != attachedShaftDirection)
-                return distance;
-            distance++;
+            if (!isMatchingShaft(level.getBlockState(cursor)))
+                break;
+            n++;
         }
-    }
-
-    private double[] measureValidProgressRange() {
-        if (attachedShaftPos == null || attachedShaftDirection == null || level == null)
-            return new double[]{0, 0};
-
-        BlockState anchorState = findAttachedShaftState(attachedShaftPos, attachedShaftSubLevelId);
-        if (anchorState == null)
-            anchorState = resolveLookupLevel(level).getBlockState(attachedShaftPos);
-
-        if (anchorState.getBlock() != CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()
-            || anchorState.getValue(PhysicsGantryShaftBlock.FACING) != attachedShaftDirection
-        ) {
-            reanchorToCurrentShaftBlock();
-            if (attachedShaftPos == null) {
-                detachFromShaft("invalid-shaft-pos");
-                return null;
-            }
-            return measureValidProgressRange();
-        }
-
-        Level lookupLevel = resolveLookupLevel(level);
-        int forward = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection);
-        int backward = measureShaftSpan(lookupLevel, attachedShaftPos, attachedShaftDirection.getOpposite());
-        return new double[]{-backward, forward};
-    }
-
-    private void reanchorToCurrentShaftBlock() {
-        if (attachedShaftPos == null || attachedShaftDirection == null)
-            return;
-
-        Level lookupLevel = resolveLookupLevel(level);
-        if (lookupLevel == null)
-            return;
-
-        int progressBlocks = (int) Math.round(attachedShaftProgress);
-
-        for (int offset : new int[]{progressBlocks, progressBlocks + 1, progressBlocks - 1}) {
-            BlockPos checkPos = attachedShaftPos.relative(attachedShaftDirection, offset);
-            BlockState state = findAttachedShaftState(checkPos, attachedShaftSubLevelId);
-            if (state == null)
-                state = lookupLevel.getBlockState(checkPos);
-
-            if (state.getBlock() == CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()
-                && state.getValue(PhysicsGantryShaftBlock.FACING) == attachedShaftDirection
-            ) {
-                double blockDelta = (checkPos.getX() - attachedShaftPos.getX()) * attachedShaftDirection.getStepX()
-                    + (checkPos.getY() - attachedShaftPos.getY()) * attachedShaftDirection.getStepY()
-                    + (checkPos.getZ() - attachedShaftPos.getZ()) * attachedShaftDirection.getStepZ();
-
-                double newProgress = attachedShaftProgress - blockDelta;
-
-                if (Math.abs(newProgress) <= 0.5) {
-                    attachedShaftProgress = newProgress;
-                    attachedShaftPos = checkPos.immutable();
-
-                    setChanged();
-                    return;
-                }
-            }
-        }
-
-        clearAttachmentTrackingStateAndRefreshShaft();
-    }
-
-    private boolean hasValidAttachedShaft(Level lookupLevel) {
-        if (assembledToSubLevel
-            && lookupLevel != null
-            && attachedShaftPos != null
-            && attachedShaftDirection != null
-            && attachedCarriageFacing != null
-        ) {
-            PhysicsGantryShaftBlockEntity shaft = findAttachedShaftEntity(attachedShaftPos, attachedShaftSubLevelId);
-            if (shaft != null) {
-                BlockState shaftState = shaft.getBlockState();
-                return shaftState.getBlock() == CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()
-                    && shaftState.getValue(PhysicsGantryShaftBlock.FACING) == attachedShaftDirection;
-            }
-
-            BlockState shaftState = lookupLevel.getBlockState(attachedShaftPos);
-            return shaftState.getBlock() == CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()
-                && shaftState.getValue(PhysicsGantryShaftBlock.FACING) == attachedShaftDirection;
-        } else {
-            return false;
-        }
-    }
-
-    private PhysicsGantryShaftBlockEntity findAttachedShaftEntity(BlockPos shaftPos, UUID preferredSubLevelId) {
-        if (level == null || shaftPos == null)
-            return null;
-
-        PhysicsGantryShaftBlockEntity scoped = SimulatedHelper.findBlockEntity(level, preferredSubLevelId,
-            shaftPos, PhysicsGantryShaftBlockEntity.class);
-        if (scoped != null)
-            return scoped;
-
-        PhysicsGantryShaftBlockEntity includingSubLevels = SimulatedHelper.findBlockEntityIncludingSubLevels(level,
-            shaftPos, PhysicsGantryShaftBlockEntity.class);
-        if (includingSubLevels != null)
-            return includingSubLevels;
-
-        ServerLevel serverLevel = resolveServerLevel(level);
-        if (serverLevel == null)
-            return null;
-
-        SubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
-        if (container != null) {
-            for (SubLevel subLevel : container.getAllSubLevels()) {
-                for (BlockEntity be : SubLevelBlockEntityCollector.getBlockEntities(subLevel)) {
-                    if (be instanceof PhysicsGantryShaftBlockEntity shaft && shaftPos.equals(shaft.getBlockPos())) {
-                        return shaft;
-                    }
-                }
-            }
-        }
-
-        Level lookupLevel = resolveLookupLevel(level);
-        if (lookupLevel == null)
-            return null;
-
-        return lookupLevel.getBlockEntity(shaftPos) instanceof PhysicsGantryShaftBlockEntity shaft ? shaft : null;
-    }
-
-    private BlockState findAttachedShaftState(BlockPos pos, UUID preferredSubLevelId) {
-        PhysicsGantryShaftBlockEntity shaft = findAttachedShaftEntity(pos, preferredSubLevelId);
-        return shaft == null ? null : shaft.getBlockState();
+        return n;
     }
 
     private Level resolveLookupLevel(Level currentLevel) {
@@ -1370,170 +981,9 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         return null;
     }
 
-    private BlockPos nearestGridFromSubLevel(SubLevel subLevel) {
-        Vector3d position = subLevel.logicalPose().position();
-        return position == null ? worldPosition : BlockPos.containing(position.x, position.y, position.z);
-    }
-
     private BlockPos resolveDisassemblyGoalBlockPos(SubLevel subLevel) {
-        if (attachedShaftSubLevelId != null) {
-            Vector3d subPos = subLevel.logicalPose().position();
-            Quaterniond subOrient = subLevel.logicalPose().orientation();
-            Vector3d rotPoint = subLevel.logicalPose().rotationPoint();
-
-            if (subPos != null && subOrient != null && rotPoint != null) {
-                Vector3d local = new Vector3d(
-                    worldPosition.getX() + 0.5,
-                    worldPosition.getY() + 0.5,
-                    worldPosition.getZ() + 0.5
-                ).sub(rotPoint);
-                subOrient.transform(local);
-                local.add(subPos);
-                return BlockPos.containing(local.x, local.y, local.z);
-            }
-        }
-
-        if (attachedShaftPos != null && attachedShaftDirection != null && attachedCarriageFacing != null) {
-            Vec3 baseCenter = Vec3.atCenterOf(attachedShaftPos);
-            Vec3 targetCenter = baseCenter.add(
-                attachedShaftDirection.getStepX() * attachedShaftProgress,
-                attachedShaftDirection.getStepY() * attachedShaftProgress,
-                attachedShaftDirection.getStepZ() * attachedShaftProgress
-            ).add(attachedCarriageFacing.getStepX(), attachedCarriageFacing.getStepY(), attachedCarriageFacing.getStepZ());
-            return BlockPos.containing(targetCenter.x, targetCenter.y, targetCenter.z);
-        }
-
-        return nearestGridFromSubLevel(subLevel);
-    }
-
-    private Quaterniond resolveShaftFrameOrientation() {
-        if (attachedShaftPos == null || attachedShaftDirection == null || attachedCarriageFacing == null)
-            return null;
-
-        PhysicsGantryShaftBlockEntity shaftBe = findAttachedShaftEntity(attachedShaftPos, attachedShaftSubLevelId);
-        if (shaftBe == null)
-            return null;
-
-        Vec3 shaftLocal = Vec3.atLowerCornerOf(attachedShaftDirection.getNormal());
-        Vec3 carriageLocal = Vec3.atLowerCornerOf(attachedCarriageFacing.getNormal());
-        Vec3 shaftWorld = SimulatedHelper.toContainingWorldDirection(shaftBe, shaftLocal);
-        Vec3 carriageWorld = SimulatedHelper.toContainingWorldDirection(shaftBe, carriageLocal);
-
-        if (shaftWorld == null || carriageWorld == null)
-            return null;
-
-        Vector3d forward = new Vector3d(shaftWorld.x, shaftWorld.y, shaftWorld.z).normalize();
-        Vector3d upHint = new Vector3d(carriageWorld.x, carriageWorld.y, carriageWorld.z).normalize();
-
-        if (!(Double.isFinite(forward.x) && Double.isFinite(upHint.x)))
-            return null;
-
-        if (Math.abs(forward.dot(upHint)) > 0.999) {
-            upHint = Math.abs(forward.y) < 0.9 ? new Vector3d(0, 1, 0) : new Vector3d(1, 0 ,0);
-        }
-
-        Vector3d right = new Vector3d(forward).cross(upHint);
-        if (right.lengthSquared() < 1.0E-12) {
-            upHint = Math.abs(forward.y) < 0.9 ? new Vector3d(0, 1, 0) : new Vector3d(1, 0 ,0);
-            right = new Vector3d(forward).cross(upHint);
-            if (right.lengthSquared() < 1.0E-12)
-                return null;
-        }
-
-        right.normalize();
-        Vector3d up = new Vector3d(right).cross(forward).normalize();
-
-        Matrix3d basis = new Matrix3d().identity();
-        basis.setColumn(0, forward);
-        basis.setColumn(1, up);
-        basis.setColumn(2, right);
-
-        Quaterniond orientation = new Quaterniond().setFromNormalized(basis).normalize();
-        if (!Double.isFinite(orientation.x) || !Double.isFinite(orientation.y) || !Double.isFinite(orientation.z))
-            return null;
-
-        return orientation;
-    }
-
-    private Quaterniond resolveLockedOrientation(SubLevel subLevel) {
-        if (!hasLockedSubLevelOrientation) {
-            Quaterniond current = subLevel.logicalPose().orientation();
-            if (current != null && Double.isFinite(current.x) && Double.isFinite(current.y) && Double.isFinite(current.z) && Double.isFinite(current.w)) {
-                lockedSubLevelOrientation.set(current);
-            } else {
-                lockedSubLevelOrientation.identity();
-            }
-            hasLockedSubLevelOrientation = true;
-        }
-
-        if (!hasLockedShaftFrameOrientation) {
-            Quaterniond initialFrame = resolveShaftFrameOrientation();
-            if (initialFrame != null) {
-                lockedShaftFrameOrientation.set(initialFrame);
-                hasLockedShaftFrameOrientation = true;
-            }
-        }
-
-        if (hasLockedShaftFrameOrientation) {
-            Quaterniond currentFrame = resolveShaftFrameOrientation();
-            if (currentFrame != null) {
-                Quaterniond delta = new Quaterniond(currentFrame).mul(new Quaterniond(lockedShaftFrameOrientation).conjugate()).normalize();
-                return delta.mul(new Quaterniond(lockedSubLevelOrientation)).normalize();
-            }
-        }
-
-        return new Quaterniond(lockedSubLevelOrientation);
-    }
-
-    private Vector3d computeLockedAttachmentTargetPosition(SubLevel subLevel, Vec3 worldAnchor, Quaterniond orientation) {
-        if (!hasLockedLocalAttachmentAnchor) {
-            Vec3 initialLocal = toSubLevelLocalAnchor(subLevel, worldAnchor);
-            if (initialLocal != null && Double.isFinite(initialLocal.x) && Double.isFinite(initialLocal.y) && Double.isFinite(initialLocal.z)) {
-                lockedLocalAttachmentAnchor.set(initialLocal.x, initialLocal.y, initialLocal.z);
-            } else {
-                lockedLocalAttachmentAnchor.set(
-                    attachedCarriageFacing == null ? 0.0 : attachedCarriageFacing.getStepX() * 0.5,
-                    attachedCarriageFacing == null ? 0.0 : attachedCarriageFacing.getStepY() * 0.5,
-                    attachedCarriageFacing == null ? 0.0 : attachedCarriageFacing.getStepZ() * 0.5
-                );
-            }
-
-            hasLockedLocalAttachmentAnchor = true;
-            Vector3d initialRotPoint = subLevel.logicalPose().rotationPoint();
-            if (initialRotPoint != null && Double.isFinite(initialRotPoint.x) && Double.isFinite(initialRotPoint.y) && Double.isFinite(initialRotPoint.z)) {
-                lockedRotationPoint.set(initialRotPoint);
-                hasLockedRotationPoint = true;
-            }
-        }
-
-        Vector3d effectiveLocalAnchor = new Vector3d(lockedLocalAttachmentAnchor);
-        if (hasLockedRotationPoint) {
-            Vector3d currentRotPoint = subLevel.logicalPose().rotationPoint();
-            if (currentRotPoint != null && Double.isFinite(currentRotPoint.x) && Double.isFinite(currentRotPoint.y) && Double.isFinite(currentRotPoint.z)) {
-                effectiveLocalAnchor.add(
-                    lockedRotationPoint.x - currentRotPoint.x,
-                    lockedRotationPoint.y - currentRotPoint.y,
-                    lockedRotationPoint.z - currentRotPoint.z
-                );
-            }
-        }
-
-        Vector3d rotatedLocal = new Vector3d(effectiveLocalAnchor);
-        new Quaterniond(orientation).transform(rotatedLocal);
-        return new Vector3d(worldAnchor.x - rotatedLocal.x, worldAnchor.y - rotatedLocal.y, worldAnchor.z - rotatedLocal.z);
-    }
-
-    private void resetSubLevelVelocity(SubLevel subLevel) {
-        if (subLevel != null && level != null && level instanceof ServerLevel serverLevel) {
-            ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
-            if (container == null)
-                return;
-
-            SubLevelPhysicsSystem physics = container.physicsSystem();
-            PhysicsPipeline pipeline = physics.getPipeline();
-
-            pipeline.resetVelocity((PhysicsPipelineBody) subLevel);
-        }
+        Vec3 world = subLevel.logicalPose().transformPosition(Vec3.atCenterOf(worldPosition));
+        return BlockPos.containing(world);
     }
 
     private boolean isFiniteAndSafe(double value) {
@@ -1570,14 +1020,8 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
     @Override
     public void remove() {
-        if (level != null && !level.isClientSide) {
-            //if (hasTrackedAttachmentState() || shaftConstraintHandle != null || shaftConstraintWorldAnchor != null) {
-                clearShaftConstraint();
-                clearAttachmentTrackingStateAndRefreshShaft();
-                setChanged();
-                sendData();
-            //}
-        }
+        if (level != null && !level.isClientSide)
+            clearShaftConstraint();
         super.remove();
     }
 

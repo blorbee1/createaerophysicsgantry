@@ -65,6 +65,19 @@ public final class SimulatedHelper {
         return null;
     }
 
+    @Nullable
+    public static <T extends BlockEntity> T findBlockEntityAtWorldPoint(Level level, Vec3 worldPoint, Class<T> type) {
+        if (level == null || worldPoint == null)
+            return null;
+
+        SubLevel containing = Sable.HELPER.getContaining(level, BlockPos.containing(worldPoint));
+        BlockEntity be = Sable.HELPER.runIncludingSubLevels(level, worldPoint, Boolean.TRUE, containing, (subLevel, internalPos) -> {
+            BlockEntity found = findBlockEntityInAccess(level, subLevel, internalPos);
+            return type.isInstance(found) ? found : null;
+        });
+        return type.isInstance(be) ? type.cast(be) : null;
+    }
+
     public static Vec3 toContainingWorldDirection(BlockEntity blockEntity, Vec3 localDirection) {
         if (localDirection == null)
             return null;

@@ -40,42 +40,6 @@ public class PhysicsGantryShaftBlockEntity extends KineticBlockEntity {
         pullAdjacentDisassembledCarriagesIntoCurrentLevel();
     }
 
-    public void checkAttachedCarriageBlocks() {
-        if (canAssembleOn())
-            refreshCarriageAnchorLookup();
-    }
-
-    public void refreshCarriageAnchorLookup() {
-        if (level == null)
-            return;
-
-        for (Direction d : Iterate.directions) {
-            if (d.getAxis() != (getBlockState().getValue(PhysicsGantryShaftBlock.FACING)).getAxis()) {
-                BlockPos offset = worldPosition.relative(d);
-                BlockState pinionState = level.getBlockState(offset);
-                if (pinionState.getBlock() == CAPGBlocks.PHYSICS_GANTRY_CARRIAGE.get() && pinionState.getValue(PhysicsGantryCarriageBlock.FACING) == d) {
-                    PhysicsGantryCarriageBlockEntity carriageBlockEntity = null;
-                    if (level.getBlockEntity(offset) instanceof PhysicsGantryCarriageBlockEntity carriage) {
-                        carriageBlockEntity = carriage;
-                    } else {
-                        carriageBlockEntity = SimulatedHelper.findBlockEntityIncludingSubLevels(level, offset,
-                            PhysicsGantryCarriageBlockEntity.class);
-                    }
-
-                    if (carriageBlockEntity != null && carriageBlockEntity.hasActiveAttachmentAnchor()) {
-                        carriageBlockEntity.checkValidGantryShaft();
-                    }
-                }
-            }
-        }
-    }
-
-    @Override
-    public void onSpeedChanged(float previousSpeed) {
-        super.onSpeedChanged(previousSpeed);
-        checkAttachedCarriageBlocks();
-    }
-
     @Override
     public float propagateRotationTo(KineticBlockEntity target, BlockState stateFrom, BlockState stateTo, BlockPos diff, boolean connectedViaAxes, boolean connectedViaCogs) {
         float defaultModifier = super.propagateRotationTo(target, stateFrom, stateTo, diff, connectedViaAxes, connectedViaCogs);

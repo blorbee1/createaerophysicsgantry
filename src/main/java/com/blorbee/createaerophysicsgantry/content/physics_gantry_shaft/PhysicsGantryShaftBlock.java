@@ -146,21 +146,6 @@ public class PhysicsGantryShaftBlock extends DirectionalKineticBlock implements 
     }
 
     @Override
-    public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
-        super.onPlace(state, level, pos, oldState, isMoving);
-        if (!level.isClientSide && oldState.getBlock() == CAPGBlocks.PHYSICS_GANTRY_SHAFT.get()) {
-            PhysicsGantryShaftBlock.Part oldPart = oldState.getValue(PART);
-            PhysicsGantryShaftBlock.Part part = state.getValue(PART);
-            if ((
-                oldPart != Part.MIDDLE && part == Part.MIDDLE
-                || oldPart != Part.SINGLE && part != Part.SINGLE
-            ) && level.getBlockEntity(pos) instanceof PhysicsGantryShaftBlockEntity be) {
-                be.checkAttachedCarriageBlocks();
-            }
-        }
-    }
-
-    @Override
     protected void neighborChanged(BlockState state, Level level, BlockPos pos, Block neighborBlock, BlockPos neighborPos, boolean movedByPiston) {
         if (level.isClientSide)
             return;

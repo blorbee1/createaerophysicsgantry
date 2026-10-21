@@ -38,11 +38,11 @@ public class PhysicsGantryCarriageBlock extends DirectionalAxisKineticBlock impl
         }
     }
 
-    @Override
-    public void updateIndirectNeighbourShapes(BlockState stateIn, LevelAccessor worldIn, BlockPos pos, int flags, int count) {
-        super.updateIndirectNeighbourShapes(stateIn, worldIn, pos, flags, count);
-        withBlockEntityDo(worldIn, pos, PhysicsGantryCarriageBlockEntity::checkValidGantryShaft);
-    }
+//    @Override
+//    public void updateIndirectNeighbourShapes(BlockState stateIn, LevelAccessor worldIn, BlockPos pos, int flags, int count) {
+//        super.updateIndirectNeighbourShapes(stateIn, worldIn, pos, flags, count);
+//        withBlockEntityDo(worldIn, pos, PhysicsGantryCarriageBlockEntity::checkValidGantryShaft);
+//    }
 
     @Override
     protected Direction getFacingForPlacement(BlockPlaceContext context) {
@@ -76,9 +76,11 @@ public class PhysicsGantryCarriageBlock extends DirectionalAxisKineticBlock impl
 
     @Override
     protected void neighborChanged(BlockState state, Level level, BlockPos pos, Block neighborBlock, BlockPos neighborPos, boolean movedByPiston) {
-        if (neighborPos.equals(pos.relative(state.getValue(FACING).getOpposite())) && !canSurvive(state, level, pos)) {
-            level.destroyBlock(pos, true);
-        }
+//        if (neighborPos.equals(pos.relative(state.getValue(FACING).getOpposite())) && !canSurvive(state, level, pos)) {
+//            level.destroyBlock(pos, true);
+//        }
+        // intentionally empty
+        // shaft assembly removes the world block and would pop the carriage
     }
 
     @Override
