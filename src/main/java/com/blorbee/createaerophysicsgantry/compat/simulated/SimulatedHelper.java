@@ -7,9 +7,11 @@ import dev.ryanhcode.sable.sublevel.SubLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
 import javax.annotation.Nullable;
+import java.util.Set;
 import java.util.UUID;
 
 public final class SimulatedHelper {
@@ -76,6 +78,20 @@ public final class SimulatedHelper {
             return type.isInstance(found) ? found : null;
         });
         return type.isInstance(be) ? type.cast(be) : null;
+    }
+
+    public static boolean isSolidAtWorldPoint(Level level, Vec3 worldPoint, Set<UUID> ignoredSubLevels) {
+        if (level == null || worldPoint == null)
+            return true;
+
+        SubLevel containing = Sable.HELPER.getContaining(level, BlockPos.containing(worldPoint));
+        Boolean hit = Sable.HELPER.runIncludingSubLevels(level, worldPoint, Boolean.TRUE, containing, (subLevel, interalPos) -> {
+            if (subLevel != null && ignoredSubLevels.contains(subLevel.getUniqueId()))
+                return null;
+            BlockState state = level.getBlockState(interalPos);
+            return state.getCollisionShape(level, interalPos).isEmpty() ? null : Boolean.TRUE;
+        });
+        return hit != null;
     }
 
     public static Vec3 toContainingWorldDirection(BlockEntity blockEntity, Vec3 localDirection) {
