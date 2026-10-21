@@ -5,8 +5,10 @@
   "compatibilityLevel": "JAVA_21",
   "refmap": "createaerophysicsgantry.refmap.json",
   "mixins": [
-    "PlaceMergingGluePacketMixin",
-    "MergingGlueItemHandlerMixin"
+
+  ],
+  "client": [
+    "compat.bitsnbobs.CogwheelChainPlacementInteractionMixin"
   ],
   "injectors": {
     "defaultRequire": 1
