@@ -735,7 +735,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         ShaftRef shaft = resolveShaft(serverLevel, carriageSubLevel);
         if (shaft == null) {
             if (++missingShaftTicks > MISSING_SHAFT_GRACE_TICKS)
-                detachFromShaft("shaft-missing");
+                detachFromShaft();
             return;
         }
         missingShaftTicks = 0;
@@ -990,7 +990,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         return state.getBlock() == Blocks.BEDROCK || state.getDestroySpeed(chunkLevel, pos) == -1.0F;
     }
 
-    public void detachFromShaft(String reason) {
+    public void detachFromShaft() {
         if (level != null && !level.isClientSide) {
             if (hasTrackedAttachmentState() || shaftConstraintHandle != null) {
                 clearShaftConstraint();
@@ -999,15 +999,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                 if (carriageSubLevel == null)
                     carriageSubLevel = SimulatedHelper.getContainingSubLevel(this);
 
-                // TODO: try to fix shaft assembled unassembled carriage, break shaft
-                // it works when using disassembleSubLevel, the block will fall
-                // by using disassembleSubLevel will cause other paths not to make the block fall because the sublevel got disassembled
-                // dont ask me why disassembling doesnt actually disassemble the block
                 if (carriageSubLevel != null) {
-//                    clearAttachmentTrackingStateAndRefreshShaft();
-//                    if (level instanceof ServerLevel serverLevel) {
-//                        serverLevel.destroyBlock(getBlockPos(), true);
-//                    }
                     ServerLevel serverLevel = resolveServerLevel(level);
                     if (serverLevel != null) {
                         BlockPos disassemblyGoal = resolveDisassemblyGoalBlockPos(carriageSubLevel);
@@ -1021,16 +1013,8 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
                     }
                 }
 
-//                if (level instanceof ServerLevel serverLevel) {
-//                    serverLevel.destroyBlock(getBlockPos(), true);
-//                }
-
                 setChanged();
                 sendData();
-
-//                LOGGER.debug(
-//                    "[PhysicsGantry] detached from shaft pos={} reason={} sublevelid={}",
-//                    this.worldPosition, reason, SimulatedHelper.getContainingSubLevelId(this));
             }
         }
     }
