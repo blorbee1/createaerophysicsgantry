@@ -62,7 +62,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
     private static final int MOTOR_SIGN = 1;
     private static final int CONSTRAINT_GRACE_TICKS = 5;
-    private static final int MISSING_SHAFT_GRACE_TICKS = 20;
+    private static final int MISSING_SHAFT_GRACE_TICKS = 5;
     private static final int STALL_WAKE_TICKS = 5;
     private static final double EDGE_INSET = 0.02;
 
@@ -121,6 +121,9 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         SubLevel currentSubLevel = resolveAttachedSubLevel();
         if (isAttachedPayloadSubLevel(currentSubLevel)) {
             PhysicsGantryCarriageBlockEntity active = resolveActiveCarriageInstance(null, null, null);
+            if (active.isShaftInSubLevel())
+                return; // the carriage must stay assembled while the shaft is
+
             if (active != this) {
                 active.lastToggleGameTime = this.lastToggleGameTime;
                 active.doSubLevelDisassemble();
@@ -135,6 +138,15 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
     public boolean isSubLevelAssembled() {
         return assembledToSubLevel || attachedSubLevelId != null;
+    }
+
+    public boolean isShaftInSubLevel() {
+        ServerLevel serverLevel = resolveServerLevel(level);
+        if (serverLevel != null && resolveAttachedSubLevel() instanceof ServerSubLevel own) {
+            ShaftRef ref = resolveShaft(serverLevel, own);
+            return ref != null && ref.subLevelId() != null;
+        }
+        return attachedShaftSubLevelId != null;
     }
 
     private boolean hasTrackedAttachmentState() {
@@ -157,8 +169,16 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         }
 
         SubLevel attached = resolveAttachedSubLevel();
-        if (attached == null)
+        if (attached == null) {
+            // we think we are assembled but we are a plain world block, something else must have done it
+            if (!SableCompanion.INSTANCE.isInPlotGrid(level, worldPosition)) {
+                clearAttachmentTrackingStateAndRefreshShaft();
+                setChanged();
+                sendData();
+            }
             return;
+        }
+
         if (!assembledToSubLevel && attachedShaftPos != null && attachedShaftDirection != null && attachedCarriageFacing != null)
             assembledToSubLevel = true;
         runAttachmentTick(attached);
