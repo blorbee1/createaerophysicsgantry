@@ -166,10 +166,6 @@ dependencies {
     runtimeOnly("maven.modrinth:create-aeronautics:${create_simulated_version}+mc${minecraft_version}")
 
     implementation("mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}")
-
-    runtimeOnly("maven.modrinth:T8bvmqVZ:g9Lmjjc5")
-    runtimeOnly("maven.modrinth:sHO3MhQx:BOTN7zzN")
-    runtimeOnly("maven.modrinth:RpH8tmT1:dxtZVosY")
 }
 
 tasks.named("compileJava") {
