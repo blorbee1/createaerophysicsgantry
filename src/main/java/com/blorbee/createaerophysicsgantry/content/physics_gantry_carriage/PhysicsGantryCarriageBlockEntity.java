@@ -185,17 +185,27 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
     }
 
     private void tickUnassembledCarriage() {
-        if (SimulatedHelper.getContainingSubLevel(this) != null)
-            return;
-
         BlockState state = getBlockState();
         if (!(state.getBlock() instanceof PhysicsGantryCarriageBlock))
             return;
 
         BlockPos shaftPos = worldPosition.relative(state.getValue(PhysicsGantryCarriageBlock.FACING).getOpposite());
-        if (level.getBlockEntity(shaftPos) instanceof PhysicsGantryShaftBlockEntity) {
-            missingShaftTicks = 0; // normal state
+        SubLevel containing = SimulatedHelper.getContainingSubLevel(this);
+
+        if (containing != null) {
+            // built into sublevel (inside of shaft's sublevel, gotta assemble)
+            if (level.getBlockEntity(shaftPos) instanceof PhysicsGantryShaftBlockEntity) {
+                missingShaftTicks = 0;
+                assembleOrPop();
+            } else if (++missingShaftTicks > MISSING_SHAFT_GRACE_TICKS) {
+                level.destroyBlock(worldPosition, true);
+            }
             return;
+        }
+
+        if (level.getBlockEntity(shaftPos) instanceof PhysicsGantryShaftBlockEntity) {
+            missingShaftTicks = 0;
+            return; // world carriage & world shaft: normal idle
         }
 
         PhysicsGantryShaftBlockEntity shaft = SimulatedHelper.findBlockEntityIncludingSubLevels(level, shaftPos, PhysicsGantryShaftBlockEntity.class);
@@ -208,6 +218,10 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         missingShaftTicks = 0;
 
         // shaft is in a sublevel and we are in the world, we must join with our own sublevel
+        assembleOrPop();
+    }
+
+    private void assembleOrPop() {
         clearAttachmentTrackingState();
         doSubLevelAssemble();
         if (!assembledToSubLevel)
