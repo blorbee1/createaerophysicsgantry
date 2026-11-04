@@ -4,6 +4,7 @@ import com.blorbee.createaerophysicsgantry.compat.simulated.SimulatedHelper;
 import com.blorbee.createaerophysicsgantry.content.physics_gantry_shaft.PhysicsGantryShaftBlock;
 import com.blorbee.createaerophysicsgantry.content.physics_gantry_shaft.PhysicsGantryShaftBlockEntity;
 import com.blorbee.createaerophysicsgantry.registry.CAPGBlocks;
+import com.blorbee.createaerophysicsgantry.util.ConstraintGraph;
 import com.blorbee.createaerophysicsgantry.util.SubLevelBlockEntityCollector;
 import com.mojang.logging.LogUtils;
 import com.simibubi.create.AllSoundEvents;
@@ -16,8 +17,6 @@ import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.SubLevelAssemblyHelper;
 import dev.ryanhcode.sable.api.block.BlockEntitySubLevelActor;
-import dev.ryanhcode.sable.api.physics.PhysicsPipeline;
-import dev.ryanhcode.sable.api.physics.PhysicsPipelineBody;
 import dev.ryanhcode.sable.api.physics.constraint.GenericConstraintConfiguration;
 import dev.ryanhcode.sable.api.physics.constraint.GenericConstraintHandle;
 import dev.ryanhcode.sable.api.physics.constraint.ConstraintJointAxis;
@@ -29,7 +28,6 @@ import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
 import dev.ryanhcode.sable.companion.math.Pose3d;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
-import dev.ryanhcode.sable.sublevel.system.SubLevelPhysicsSystem;
 import dev.simulated_team.simulated.content.blocks.docking_connector.DockingConnectorBlockEntity;
 import dev.simulated_team.simulated.content.entities.honey_glue.HoneyGlueEntity;
 import dev.simulated_team.simulated.util.SimAssemblyHelper;
@@ -915,8 +913,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             if (be instanceof PhysicsGantryCarriageBlockEntity c && !c.isRemoved() && c.hasActiveAttachmentAnchor())
                 return true;
         }
-        // TODO: check other anchored sub levels
-        return false;
+        return ConstraintGraph.isAnchoredToWorld(other.getUniqueId(), shaftConstraintHandle);
     }
 
     private List<BlockPos> getLeadingBlocks(ServerLevel serverLevel, ServerSubLevel subLevel, Direction dir) {

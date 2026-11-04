@@ -5,7 +5,7 @@
   "compatibilityLevel": "JAVA_21",
   "refmap": "createaerophysicsgantry.refmap.json",
   "mixins": [
-
+    "RapierPhysicsPipelineMixin"
   ],
   "client": [
     "compat.bitsnbobs.CogwheelChainPlacementInteractionMixin"
