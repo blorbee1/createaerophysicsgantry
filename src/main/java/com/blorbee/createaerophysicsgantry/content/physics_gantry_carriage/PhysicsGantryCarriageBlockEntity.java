@@ -775,7 +775,15 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             attachedShaftProgress = Math.clamp(attachedShaftProgress, range[0], range[1]);
 
             // use updated attachedShaftProgress
-            stalledTicks = Math.abs(attachedShaftProgress - actual) > leash * 0.75 ? stalledTicks + 1 : 0;
+            boolean notFollowing = Math.abs(attachedShaftProgress - actual) > 0.05
+                && !Double.isNaN(lastActual)
+                && Math.abs(actual - lastActual) < 1.0e-4;
+
+            if (stalledTicks < 0)
+                stalledTicks++;
+            else
+                stalledTicks = notFollowing ? stalledTicks + 1 : 0;
+            lastActual = actual;
         }
 
         boolean moving = attachedShaftProgress != before;
@@ -784,10 +792,10 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
 
         boolean needsWaked = (moving && !wasMoving) || stalledTicks >= STALL_WAKE_TICKS;
         if (needsWaked) {
-            stalledTicks = 0;
             if (constraintLive)
                 attachedShaftProgress = actual;
             clearShaftConstraint();
+            stalledTicks = -STALL_COOLDOWN_TICKS;
         }
 
         driveConstraint(serverLevel, carriageSubLevel, shaft);
@@ -892,9 +900,22 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         for (BlockPos local : getLeadingBlocks(serverLevel, subLevel, localDir)) {
             Vec3 center = pose.transformPosition(Vec3.atCenterOf(local));
             Vec3 lead = center.add(travel.scale(0.5 - EDGE_INSET)).add(move);
-            if (SimulatedHelper.isSolidAtWorldPoint(serverLevel, lead, ignored))
+
+            SimulatedHelper.SolidHit hit = SimulatedHelper.findSolidAtWorldPoint(serverLevel, lead, ignored);
+            if (hit == null)
+                continue;
+            if (hit.subLevel() == null || isImmovable(hit.subLevel()))
+                return true; // world block or something fixed
+        }
+        return false;
+    }
+
+    private boolean isImmovable(SubLevel other) {
+        for (BlockEntity be : SubLevelBlockEntityCollector.getBlockEntities(other)) {
+            if (be instanceof PhysicsGantryCarriageBlockEntity c && !c.isRemoved() && c.hasActiveAttachmentAnchor())
                 return true;
         }
+        // TODO: check other anchored sub levels
         return false;
     }
 

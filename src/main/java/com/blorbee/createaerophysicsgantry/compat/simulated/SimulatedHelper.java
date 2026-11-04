@@ -15,6 +15,8 @@ import java.util.Set;
 import java.util.UUID;
 
 public final class SimulatedHelper {
+    public record SolidHit(@Nullable SubLevel subLevel) {}
+
     @Nullable
     public static BlockEntity findBlockEntity(Level level, @Nullable UUID subLevelId, BlockPos pos) {
         if (level != null && pos != null) {
@@ -81,17 +83,21 @@ public final class SimulatedHelper {
     }
 
     public static boolean isSolidAtWorldPoint(Level level, Vec3 worldPoint, Set<UUID> ignoredSubLevels) {
+        return findSolidAtWorldPoint(level, worldPoint, ignoredSubLevels) != null;
+    }
+
+    @Nullable
+    public static SolidHit findSolidAtWorldPoint(Level level, Vec3 worldPoint, Set<UUID> ignoredSubLevels) {
         if (level == null || worldPoint == null)
-            return true;
+            return null;
 
         SubLevel containing = Sable.HELPER.getContaining(level, BlockPos.containing(worldPoint));
-        Boolean hit = Sable.HELPER.runIncludingSubLevels(level, worldPoint, Boolean.TRUE, containing, (subLevel, interalPos) -> {
+        return Sable.HELPER.runIncludingSubLevels(level, worldPoint, Boolean.TRUE, containing, (subLevel, interalPos) -> {
             if (subLevel != null && ignoredSubLevels.contains(subLevel.getUniqueId()))
                 return null;
             BlockState state = level.getBlockState(interalPos);
-            return state.getCollisionShape(level, interalPos).isEmpty() ? null : Boolean.TRUE;
+            return state.getCollisionShape(level, interalPos).isEmpty() ? null : new SolidHit(subLevel);
         });
-        return hit != null;
     }
 
     public static Vec3 toContainingWorldDirection(BlockEntity blockEntity, Vec3 localDirection) {
