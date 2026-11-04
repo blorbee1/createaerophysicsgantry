@@ -65,6 +65,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
     private static final int MISSING_SHAFT_GRACE_TICKS = 5;
     private static final int STALL_WAKE_TICKS = 5;
     private static final double EDGE_INSET = 0.02;
+    private static final int STALL_COOLDOWN_TICKS = 20;
 
     private record ShaftRef(PhysicsGantryShaftBlockEntity be, UUID subLevelId, BlockPos pos) {}
 
@@ -85,6 +86,9 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
     private double constraintBaseProgress;
     private long constraintBuiltTick;
     private final Vector3d constraintBaseAnchor = new Vector3d();
+    private final Vector3d constraintRotationPoint = new Vector3d();
+    private final Vector3d constraintShaftRotationPoint = new Vector3d();
+    private double lastActual = Double.NaN;
 
     private boolean wasMoving;
     private int missingShaftTicks;
@@ -843,16 +847,24 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         if (shaftConstraintHandle != null) {
             boolean sameShaft = Objects.equals(constraintShaftSubLevelId, shaft.subLevelId())
                 && Objects.equals(constraintShaftPos, shaft.pos());
+
             if (!sameShaft) {
                 clearShaftConstraint();
             } else if (!shaftConstraintHandle.isValid()) {
                 if (serverLevel.getGameTime() - constraintBuiltTick < CONSTRAINT_GRACE_TICKS)
                     return;
                 clearShaftConstraint();
+            } else if (centerOfMassChanged(serverLevel, subLevel)) {
+                // reanchor on the shaft line
+                Vector3d axis = new Vector3d(attachedShaftDirection.getStepX(), attachedShaftDirection.getStepY(), attachedShaftDirection.getStepZ());
+                Vector3d expected = new Vector3d(constraintBaseAnchor).fma(attachedShaftProgress - constraintBaseProgress, axis);
+                clearShaftConstraint();
+                if (!buildConstraint(serverLevel, subLevel, shaft, expected))
+                    return;
             }
         }
 
-        if (shaftConstraintHandle == null && !buildConstraint(serverLevel, subLevel, shaft))
+        if (shaftConstraintHandle == null && !buildConstraint(serverLevel, subLevel, shaft, null))
             return;
         shaftConstraintHandle.setMotor(getConstraintAxis(), motorTarget(), 1.0E6, 1.0E4, false, 0.0);
     }
@@ -910,7 +922,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         return out;
     }
 
-    private boolean buildConstraint(ServerLevel serverLevel, ServerSubLevel subLevel, ShaftRef shaft) {
+    private boolean buildConstraint(ServerLevel serverLevel, ServerSubLevel subLevel, ShaftRef shaft, @Nullable Vector3d pos1Override) {
         ServerSubLevel shaftSubLevel = null;
         if (shaft.subLevelId() != null) {
             if (!(SubLevelBlockEntityCollector.getSubLevel(serverLevel, shaft.subLevelId()) instanceof ServerSubLevel s))
@@ -923,21 +935,16 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
             return false;
 
         Pose3d carriagePose = subLevel.logicalPose();
-        Vector3d com = new Vector3d(carriagePose.position());
-        Vector3d pos1 = new Vector3d(com);
-        Quaterniond shaftQ = new Quaterniond();
-
-        if (shaftSubLevel != null) {
-            Vec3 local = SimulatedHelper.toContainingLocalPosition(shaftSubLevel, new Vec3(com.x, com.y, com.z));
-            if (local == null)
-                return false;
-            pos1.set(local.x, local.y, local.z);
-            shaftQ.set(shaftSubLevel.logicalPose().orientation());
-        }
-        Vector3d pos2 = new Vector3d(carriagePose.rotationPoint());
-
-        if (!isFiniteAndSafe(pos1.x) || !isFiniteAndSafe(pos1.y) || !isFiniteAndSafe(pos1.z))
+        Vector3d pos1 = pos1Override != null ? new Vector3d(pos1Override) : currentAnchorInShaftFrame(serverLevel, subLevel, shaft.subLevelId());
+        if (pos1 == null || !isFiniteAndSafe(pos1.x) || !isFiniteAndSafe(pos1.y) || !isFiniteAndSafe(pos1.z))
             return false;
+
+        // fixed block of the carriage
+        Vector3d pos2 = new Vector3d(worldPosition.getX() + 0.5, worldPosition.getY() + 0.5, worldPosition.getZ() + 0.5);
+
+        Quaterniond shaftQ = shaftSubLevel != null
+            ? new Quaterniond(shaftSubLevel.logicalPose().orientation())
+            : new Quaterniond();
 
         Quaterniond orientation1 = new Quaterniond();
         Quaterniond orientation2 = new Quaterniond(carriagePose.orientation()).conjugate().mul(shaftQ).normalize();
@@ -969,6 +976,10 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         constraintBaseProgress = attachedShaftProgress;
         constraintBuiltTick = serverLevel.getGameTime();
         constraintBaseAnchor.set(pos1);
+        constraintRotationPoint.set(carriagePose.rotationPoint());
+        if (shaftSubLevel != null)
+            constraintShaftRotationPoint.set(shaftSubLevel.logicalPose().rotationPoint());
+
         return true;
     }
 
@@ -1027,6 +1038,7 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
         constraintShaftPos = null;
         constraintBaseProgress = 0.0;
         stalledTicks = 0;
+        lastActual = Double.NaN;
     }
 
     private int measureShaftSpan(ServerLevel level, Direction direction) {
@@ -1042,21 +1054,36 @@ public class PhysicsGantryCarriageBlockEntity extends KineticBlockEntity impleme
     }
 
     private double measureActualProgress(ServerLevel serverLevel, ServerSubLevel subLevel) {
-        Vector3d inShaft = new Vector3d(subLevel.logicalPose().position());
-        if (constraintShaftSubLevelId != null) {
-            SubLevel shaftSub = SubLevelBlockEntityCollector.getSubLevel(serverLevel, constraintShaftSubLevelId);
-            if (shaftSub == null)
-                return attachedShaftProgress;
-            Vec3 local = SimulatedHelper.toContainingLocalPosition(shaftSub, new Vec3(inShaft.x, inShaft.y, inShaft.z));
-            if (local == null)
-                return attachedShaftProgress;
-            inShaft.set(local.x, local.y, local.z);
-        }
+        Vector3d p = currentAnchorInShaftFrame(serverLevel, subLevel, constraintShaftSubLevelId);
+        if (p == null)
+            return attachedShaftProgress;
 
-        double along = (inShaft.x - constraintBaseAnchor.x) * attachedShaftDirection.getStepX()
-            + (inShaft.y - constraintBaseAnchor.y) * attachedShaftDirection.getStepY()
-            + (inShaft.z - constraintBaseAnchor.z) * attachedShaftDirection.getStepZ();
+        double along = (p.x - constraintBaseAnchor.x) * attachedShaftDirection.getStepX()
+            + (p.y - constraintBaseAnchor.y) * attachedShaftDirection.getStepY()
+            + (p.z - constraintBaseAnchor.z) * attachedShaftDirection.getStepZ();
         return constraintBaseProgress + along;
+    }
+
+    // carriage anchor (its own block center) expressed in the shaft's frame
+    @Nullable
+    private Vector3d currentAnchorInShaftFrame(ServerLevel serverLevel, ServerSubLevel subLevel, @Nullable UUID shaftSubLevelId) {
+        Vec3 world = subLevel.logicalPose().transformPosition(Vec3.atCenterOf(worldPosition));
+        if (shaftSubLevelId == null)
+            return new Vector3d(world.x, world.y, world.z);
+        SubLevel shaftSub = SubLevelBlockEntityCollector.getSubLevel(serverLevel, shaftSubLevelId);
+        if (shaftSub == null)
+            return null;
+        Vec3 local = SimulatedHelper.toContainingLocalPosition(shaftSub, world);
+        return local == null ? null : new Vector3d(local.x, local.y, local.z);
+    }
+
+    private boolean centerOfMassChanged(ServerLevel serverLevel, ServerSubLevel subLevel) {
+        if (subLevel.logicalPose().rotationPoint().distanceSquared(constraintRotationPoint) > 1.0e-8)
+            return true;
+        if (constraintShaftSubLevelId == null)
+            return false;
+        SubLevel shaftSub = SubLevelBlockEntityCollector.getSubLevel(serverLevel, constraintShaftSubLevelId);
+        return shaftSub != null && shaftSub.logicalPose().rotationPoint().distanceSquared(constraintShaftRotationPoint) > 1.0e-8;
     }
 
     private Level resolveLookupLevel(Level currentLevel) {
