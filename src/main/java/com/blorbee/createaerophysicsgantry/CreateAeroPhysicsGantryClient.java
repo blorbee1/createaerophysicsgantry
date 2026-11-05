@@ -17,6 +17,7 @@ import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
 public class CreateAeroPhysicsGantryClient {
     public CreateAeroPhysicsGantryClient(ModContainer container) {
         container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
+        CAPGPartialModels.register();
     }
 
     @SubscribeEvent
@@ -26,7 +27,6 @@ public class CreateAeroPhysicsGantryClient {
     }
 
     public static void clientInit() {
-        CAPGPartialModels.register();
         PonderIndex.addPlugin(new CAPGPonderPlugin());
     }
 }
