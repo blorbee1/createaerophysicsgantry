@@ -8,6 +8,7 @@ import com.simibubi.create.content.kinetics.base.GeneratingKineticBlockEntity;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.particles.BlockParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
@@ -20,6 +21,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 
@@ -27,6 +29,14 @@ import javax.annotation.Nullable;
 import java.util.*;
 
 public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
+    private static final int GEOMETRY_CHECK_INTERVAL = 5;
+    private static final int GEOMETRY_GRACE_TICKS = 20;
+    private static final double STRETCH_FRACTION = 0.15;
+    private static final double STRETCH_SLACK = 0.25;
+    private static final double MIN_AXIS_DOT = Math.cos(Math.toRadians(10));
+    private static final double MAX_PLANE_OFFSET = 0.3;
+    private static final double REBASE_MAX_CHANGE = 1;
+
     private static final Map<Level, Set<BeltWheelBlockEntity>> INDEXED_WHEELS = new WeakHashMap<>();
 
     private static void indexWheel(BeltWheelBlockEntity be) {
@@ -59,6 +69,25 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
     private boolean sharedOverstressed = false;
 
     private Long lastKnownNetwork;
+
+    private double restLength = -1;
+    private int geometryTick;
+    private int invalidTicks;
+    private boolean membershipKnown;
+
+    @Nullable
+    private UUID lastOwnSubLevel;
+    @Nullable
+    private UUID lastOtherSubLevel;
+
+    public enum Geometry {
+        OK,
+        MISSING,
+        TOO_FAR,
+        LENGTH,
+        AXES,
+        PLANE
+    }
 
     public BeltWheelBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
@@ -207,18 +236,54 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
 
         Vec3 a = getWorldAnchorPosition();
         Vec3 b = other.getWorldAnchorPosition();
-
         if (a == null || b == null) {
             return;
         }
 
-        Vec3 delta = b.subtract(a);
-        double distance = delta.length();
-        int maxDistance = BeltWheelBlock.getConfiguredMaxDistance();
-
-        if (distance > maxDistance + 0.01 || distance < 0.01)  {
+        double distanceSqr = a.distanceToSqr(b);
+        double maxDistanceSqr = (BeltWheelBlock.getConfiguredMaxDistance() + 0.01) * (BeltWheelBlock.getConfiguredMaxDistance() + 0.01);
+        if (distanceSqr < 0.01 || distanceSqr > maxDistanceSqr) {
             breakLink(true);
+            return;
         }
+
+        if (++geometryTick % GEOMETRY_CHECK_INTERVAL != 0)
+            return;
+
+        UUID ownSub = SimulatedHelper.getContainingSubLevelId(this);
+        UUID otherSub = SimulatedHelper.getContainingSubLevelId(other);
+
+        boolean membershipChanged = membershipKnown && (!Objects.equals(ownSub, lastOwnSubLevel) || !Objects.equals(otherSub, lastOtherSubLevel));
+        membershipKnown = true;
+        lastOwnSubLevel = ownSub;
+        lastOtherSubLevel = otherSub;
+
+        if (restLength < 0) {
+            restLength = Math.sqrt(distanceSqr);
+            setChanged();
+        }
+
+        Geometry geometry = evalulateGeometry(this, other, restLength);
+        if (membershipChanged && geometry == Geometry.LENGTH && Math.abs(distanceSqr - (restLength * restLength)) <= REBASE_MAX_CHANGE * REBASE_MAX_CHANGE) {
+            restLength = Math.sqrt(distanceSqr);
+            setChanged();
+            geometry = Geometry.OK;
+        }
+
+        if (geometry == Geometry.OK) {
+            invalidTicks = 0;
+            return;
+        }
+
+        invalidTicks += GEOMETRY_CHECK_INTERVAL;
+        if (invalidTicks >= GEOMETRY_GRACE_TICKS)
+            breakLink(true);
+    }
+
+    public void setRestLength(double length) {
+        restLength = length;
+        invalidTicks = 0;
+        setChanged();
     }
 
     @Override
@@ -288,6 +353,41 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
 
     public boolean references(BlockPos pos, @Nullable UUID subLevelId) {
         return linkedPos != null && linkedPos.equals(pos) && Objects.equals(linkedSubLevelId, subLevelId);
+    }
+
+    public static Geometry evalulateGeometry(BeltWheelBlockEntity a, BeltWheelBlockEntity b, double restLength) {
+        Vec3 pa = a.getWorldAnchorPosition();
+        Vec3 pb = b.getWorldAnchorPosition();
+        Vec3 axisA = worldAxis(a);
+        Vec3 axisB = worldAxis(b);
+        if (pa == null || pb == null || axisA == null || axisB == null)
+            return Geometry.MISSING;
+
+        Vec3 d = pb.subtract(pa);
+        double lenSqr = d.lengthSqr();
+        double maxDistanceSqr = (BeltWheelBlock.getConfiguredMaxDistance() + 0.01) * (BeltWheelBlock.getConfiguredMaxDistance() + 0.01);
+
+        if (lenSqr < 0.01 || lenSqr > maxDistanceSqr)
+            return Geometry.TOO_FAR;
+        if (Math.abs(axisA.dot(axisB)) < MIN_AXIS_DOT)
+            return Geometry.AXES;
+        if (Math.abs(d.dot(axisA)) > MAX_PLANE_OFFSET)
+            return Geometry.PLANE;
+
+        if (restLength >= 0) {
+            double slack = restLength * STRETCH_FRACTION + STRETCH_SLACK;
+            if (lenSqr > (restLength + slack) * (restLength + slack) || lenSqr < (restLength - slack) * (restLength - slack))
+                return Geometry.LENGTH;
+        }
+        return Geometry.OK;
+    }
+
+    @Nullable
+    private static Vec3 worldAxis(BeltWheelBlockEntity be) {
+        Direction.Axis axis = be.getBlockState().getValue(BlockStateProperties.AXIS);
+        Vec3 local = Vec3.atLowerCornerOf(Direction.fromAxisAndDirection(axis, Direction.AxisDirection.POSITIVE).getNormal());
+        Vec3 world = SimulatedHelper.toContainingWorldDirection(be, local);
+        return world == null || world.lengthSqr() < 1.0e-6 ? null : world;
     }
 
     public void breakLink(boolean notifyOther) {

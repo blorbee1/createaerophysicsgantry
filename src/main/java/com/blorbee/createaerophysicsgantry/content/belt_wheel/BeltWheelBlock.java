@@ -10,6 +10,8 @@ import com.simibubi.create.foundation.block.IBE;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
@@ -21,6 +23,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.ShearsItem;
+import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Block;
@@ -33,20 +36,17 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
 import javax.annotation.Nullable;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<BeltWheelBlockEntity>, ICogWheel {
-    private static final String TRANSLATE_KEY_PREFIX = "createaerophysicsgantry.belt_wheel";
+    public static final String TRANSLATE_KEY_PREFIX = "createaerophysicsgantry.belt_wheel";
+    private static final String SELECTION_TAG = "BeltWheelFirst";
 
     public static final BooleanProperty TOP_SHAFT = BooleanProperty.create("top_shaft");
     public static final BooleanProperty BOTTOM_SHAFT = BooleanProperty.create("bottom_shaft");
 
-    private static final Map<UUID, BlockPos> PENDING_LINK_POSITIONS = new ConcurrentHashMap<>();
-    private static final Map<UUID, UUID> PENDING_LINK_SUBLEVELS = new ConcurrentHashMap<>();
-    private static final Map<UUID, Long> PENDING_LINK_EXPIRY = new ConcurrentHashMap<>();
+    public record Selection(BlockPos pos, @Nullable UUID subLevel, long expiresAt) {}
 
     public BeltWheelBlock(Properties properties) {
         super(properties);
@@ -85,116 +85,131 @@ public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<Bel
         }
     }
 
+    @Nullable
+    public static String checkNewLink(BeltWheelBlockEntity first, BeltWheelBlockEntity second) {
+        Vec3 a = first.getWorldAnchorPosition();
+        Vec3 b = second.getWorldAnchorPosition();
+        if (a == null || b == null)
+            return TRANSLATE_KEY_PREFIX + ".link_missing";
+
+        Vec3 delta = b.subtract(a);
+        double distanceSqr = delta.lengthSqr();
+        int max = getConfiguredMaxDistance();
+        if (distanceSqr <= 0.01 || distanceSqr > max * max)
+            return TRANSLATE_KEY_PREFIX + ".distance_invalid";
+
+        BeltWheelBlockEntity.Geometry geometry = BeltWheelBlockEntity.evalulateGeometry(first, second, -1);
+        if (geometry == BeltWheelBlockEntity.Geometry.AXES)
+            return TRANSLATE_KEY_PREFIX + ".axes_not_parallel";
+        if (geometry == BeltWheelBlockEntity.Geometry.PLANE)
+            return TRANSLATE_KEY_PREFIX + ".not_coplanar";
+        if (geometry != BeltWheelBlockEntity.Geometry.OK)
+            return TRANSLATE_KEY_PREFIX + ".link_missing";
+
+        Vec3 localA = SimulatedHelper.toContainingLocalDirection(first, delta);
+        Vec3 localB = SimulatedHelper.toContainingLocalDirection(second, delta);
+        boolean alignedA = isAxisAligned(localA);
+        boolean alignedB = isAxisAligned(localB);
+        if (!alignedA && !alignedB)
+            return TRANSLATE_KEY_PREFIX + ".not_straight";
+
+        boolean okA = alignedA && getConnectionAxis(localA) != first.getBlockState().getValue(AXIS);
+        boolean okB = alignedB && getConnectionAxis(localB) != second.getBlockState().getValue(AXIS);
+        if (!okA && !okB)
+            return TRANSLATE_KEY_PREFIX + ".axis_mismatch";
+
+        return null;
+    }
+
     private static ItemInteractionResult handleBeltConnectorUse(Level level, Player player, ItemStack stack, BeltWheelBlockEntity clickedWheel) {
-        UUID playerId = player.getUUID();
         long now = level.getGameTime();
-
-        Long expiresAt = PENDING_LINK_EXPIRY.get(playerId);
-        if (expiresAt != null && expiresAt < now) {
-            clearPendingSelection(playerId);
-        }
-
-        BlockPos pendingPos = PENDING_LINK_POSITIONS.get(playerId);
-        UUID pendingSubLevel = PENDING_LINK_SUBLEVELS.get(playerId);
         UUID clickedSubLevel = SimulatedHelper.getContainingSubLevelId(clickedWheel);
 
-        if (pendingPos == null) {
-            setPendingSelection(playerId, clickedWheel.getBlockPos(), clickedSubLevel, now + 600L);
+        Selection pending = readSelection(stack);
+        if (pending != null && pending.expiresAt() < now) {
+            writeSelection(stack, null);
+            pending = null;
+        }
+
+        if (pending == null) {
+            writeSelection(stack, new Selection(clickedWheel.getBlockPos().immutable(), clickedSubLevel, now + 600L));
             notify(player, TRANSLATE_KEY_PREFIX + ".link_first", ChatFormatting.GRAY);
             return ItemInteractionResult.SUCCESS;
         }
 
-        if (pendingPos.equals(clickedWheel.getBlockPos()) && Objects.equals(pendingSubLevel, clickedSubLevel)) {
-            clearPendingSelection(playerId);
+        if (pending.pos().equals(clickedWheel.getBlockPos()) && Objects.equals(pending.subLevel(), clickedSubLevel)) {
+            writeSelection(stack, null);
             notify(player, TRANSLATE_KEY_PREFIX + ".link_cleared", ChatFormatting.YELLOW);
             return ItemInteractionResult.SUCCESS;
         }
 
-        BeltWheelBlockEntity firstWheel = SimulatedHelper.findBlockEntity(level, pendingSubLevel,
-            pendingPos, BeltWheelBlockEntity.class);
+        BeltWheelBlockEntity firstWheel = SimulatedHelper.findBlockEntity(level, pending.subLevel(),
+            pending.pos(), BeltWheelBlockEntity.class);
         if (firstWheel == null || firstWheel.isRemoved()) {
-            clearPendingSelection(playerId);
+            writeSelection(stack, null);
             notify(player, TRANSLATE_KEY_PREFIX + ".link_missing", ChatFormatting.RED);
             return ItemInteractionResult.SUCCESS;
         }
 
-        if (firstWheel.getBlockPos().equals(clickedWheel.getBlockPos())
-            && Objects.equals(SimulatedHelper.getContainingSubLevelId(firstWheel), clickedSubLevel)) {
-            clearPendingSelection(playerId);
-            notify(player, TRANSLATE_KEY_PREFIX + ".link_self", ChatFormatting.RED);
+        String error = checkNewLink(firstWheel, clickedWheel);
+        if (error != null) {
+            writeSelection(stack, null);
+            notify(player, error, ChatFormatting.RED);
             return ItemInteractionResult.FAIL;
         }
 
-        Direction.Axis shaftAxis = firstWheel.getBlockState().getValue(AXIS);
-        if (shaftAxis != clickedWheel.getBlockState().getValue(AXIS)) {
-            clearPendingSelection(playerId);
-            notify(player, TRANSLATE_KEY_PREFIX + ".axis_mismatch", ChatFormatting.RED);
-            return ItemInteractionResult.FAIL;
-        }
+        UUID firstSubLevel = SimulatedHelper.getContainingSubLevelId(firstWheel);
 
-        Vec3 firstAnchor = firstWheel.getWorldAnchorPosition();
-        Vec3 secondAnchor = clickedWheel.getWorldAnchorPosition();
-        if (firstAnchor != null && secondAnchor != null) {
-            Vec3 delta = secondAnchor.subtract(firstAnchor);
-            double distance = delta.length();
-            int maxDistance = getConfiguredMaxDistance();
+        firstWheel.breakLink(true);
+        clickedWheel.breakLink(true);
 
-            if (distance <= 0.01 || distance > maxDistance) {
-                clearPendingSelection(playerId);
-                notify(player, TRANSLATE_KEY_PREFIX + ".distance_invalid", ChatFormatting.RED);
-                return ItemInteractionResult.FAIL;
-            }
+        firstWheel.setLinkedTarget(clickedWheel.getBlockPos(), clickedSubLevel);
+        clickedWheel.setLinkedTarget(firstWheel.getBlockPos(), firstSubLevel);
 
-            if (!isAxisAligned(delta)) {
-                clearPendingSelection(playerId);
-                notify(player, TRANSLATE_KEY_PREFIX + ".not_straight", ChatFormatting.RED);
-                return ItemInteractionResult.FAIL;
-            }
+        double rest = firstWheel.getWorldAnchorPosition().distanceTo(clickedWheel.getWorldAnchorPosition());
+        firstWheel.setRestLength(rest);
+        clickedWheel.setRestLength(rest);
 
-            Direction.Axis connectionAxis = getConnectionAxis(delta);
-            if (connectionAxis == shaftAxis) {
-                clearPendingSelection(playerId);
-                notify(player, TRANSLATE_KEY_PREFIX + ".axis_mismatch", ChatFormatting.RED);
-                return ItemInteractionResult.FAIL;
-            }
+        level.playSound(null, clickedWheel.getBlockPos(), SoundEvents.WOOD_PLACE, SoundSource.BLOCKS, 1f, 1f);
+        level.playSound(null, firstWheel.getBlockPos(), SoundEvents.WOOD_PLACE, SoundSource.BLOCKS, 1f, 1f);
 
-            UUID firstSubLevel = SimulatedHelper.getContainingSubLevelId(firstWheel);
+        writeSelection(stack, null);
+        if (!player.getAbilities().instabuild)
+            stack.shrink(1);
 
-            firstWheel.breakLink(true);
-            clickedWheel.breakLink(true);
+        notify(player, TRANSLATE_KEY_PREFIX + ".link_success", ChatFormatting.GREEN);
+        return ItemInteractionResult.SUCCESS;
+    }
 
-            firstWheel.setLinkedTarget(clickedWheel.getBlockPos(), clickedSubLevel);
-            clickedWheel.setLinkedTarget(firstWheel.getBlockPos(), firstSubLevel);
+    @Nullable
+    public static Selection readSelection(ItemStack stack) {
+        CustomData data = stack.get(DataComponents.CUSTOM_DATA);
+        if (data == null)
+            return null;
+        CompoundTag root = data.copyTag();
+        if (!root.contains(SELECTION_TAG, CompoundTag.TAG_COMPOUND))
+            return null;
+        CompoundTag tag = root.getCompound(SELECTION_TAG);
+        return new Selection(BlockPos.of(tag.getLong("Pos")), tag.hasUUID("Sub") ? tag.getUUID("Sub") : null, tag.getLong("Expires"));
+    }
 
-            level.playSound(null, clickedWheel.getBlockPos(), SoundEvents.WOOL_PLACE, SoundSource.BLOCKS, 1.0F, 1.0F);
-            level.playSound(null, firstWheel.getBlockPos(), SoundEvents.WOOL_PLACE, SoundSource.BLOCKS, 1.0F, 1.0F);
-
-            if (!player.getAbilities().instabuild) {
-                stack.shrink(1);
-            }
-
-            clearPendingSelection(playerId);
-            notify(player, TRANSLATE_KEY_PREFIX + ".link_success", ChatFormatting.GREEN);
-            return ItemInteractionResult.SUCCESS;
+    public static void writeSelection(ItemStack stack, @Nullable Selection selection) {
+        CompoundTag root = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag();
+        if (selection == null) {
+            root.remove(SELECTION_TAG);
         } else {
-            notify(player, TRANSLATE_KEY_PREFIX + ".link_missing", ChatFormatting.RED);
-            return ItemInteractionResult.FAIL;
+            CompoundTag tag = new CompoundTag();
+            tag.putLong("Pos", selection.pos().asLong());
+            if (selection.subLevel() != null)
+                tag.putUUID("Sub", selection.subLevel());
+            tag.putLong("Expires", selection.expiresAt());
+            root.put(SELECTION_TAG, tag);
         }
-    }
 
-    private static void setPendingSelection(UUID playerId, BlockPos pos, @Nullable UUID subLevelId, long expiresAtTick) {
-        PENDING_LINK_POSITIONS.put(playerId, pos.immutable());
-        if (subLevelId == null)
-            PENDING_LINK_SUBLEVELS.remove(playerId);
+        if (root.isEmpty())
+            stack.remove(DataComponents.CUSTOM_DATA);
         else
-            PENDING_LINK_SUBLEVELS.put(playerId, subLevelId);
-        PENDING_LINK_EXPIRY.put(playerId, expiresAtTick);
-    }
-
-    private static void clearPendingSelection(UUID playerId) {
-        PENDING_LINK_POSITIONS.remove(playerId);
-        PENDING_LINK_SUBLEVELS.remove(playerId);
-        PENDING_LINK_EXPIRY.remove(playerId);
+            stack.set(DataComponents.CUSTOM_DATA, CustomData.of(root));
     }
 
     private static boolean isAxisAligned(Vec3 delta) {

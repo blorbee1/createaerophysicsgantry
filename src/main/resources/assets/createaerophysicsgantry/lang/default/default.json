@@ -4,7 +4,7 @@
   "createaerophysicsgantry.belt_wheel.link_missing": "The selected belt wheel is no longer available.",
   "createaerophysicsgantry.belt_wheel.link_self": "Cannot link a belt wheel to itself.",
   "createaerophysicsgantry.belt_wheel.axis_mismatch": "Belt wheels must share the same rotation axis.",
-  "createaerophysicsgantry.belt_wheel.distance_invalid": "Belt wheel distance is out of range (max 64 blocks).",
+  "createaerophysicsgantry.belt_wheel.distance_invalid": "Belt wheel distance is out of range (max %s blocks).",
   "createaerophysicsgantry.belt_wheel.not_straight": "Belt wheels must be in a straight line.",
   "createaerophysicsgantry.belt_wheel.link_success": "Belt wheel link created.",
   "createaerophysicsgantry.belt_wheel.link_broken": "Belt wheel link severed.",
@@ -14,5 +14,8 @@
   "createaerophysicsgantry.belt_wheel.role_driver": "Driver",
   "createaerophysicsgantry.belt_wheel.role_receiver": "Receiver",
   "createaerophysicsgantry.belt_wheel.direction_out": "outbound",
-  "createaerophysicsgantry.belt_wheel.direction_in": "inbound"
+  "createaerophysicsgantry.belt_wheel.direction_in": "inbound",
+  "createaerophysicsgantry.belt_wheel.axes_not_parallel": "Wheels must face the same direction",
+  "createaerophysicsgantry.belt_wheel.not_coplanar": "Wheels must be level with each other",
+  "createaerophysicsgantry.belt_wheel.preview_ok": "Click to connect (%s blocks)"
 }

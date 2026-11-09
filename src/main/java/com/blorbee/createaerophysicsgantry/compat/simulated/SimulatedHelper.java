@@ -9,6 +9,8 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import org.joml.Quaterniond;
+import org.joml.Vector3d;
 
 import javax.annotation.Nullable;
 import java.util.Set;
@@ -112,6 +114,21 @@ public final class SimulatedHelper {
 
         Pose3d pose = subLevel.logicalPose();
         Vec3 vec = pose.transformNormal(localDirection);
+        return vec.normalize();
+    }
+
+    public static Vec3 toContainingLocalDirection(BlockEntity blockEntity, Vec3 worldDirection) {
+        if (worldDirection == null)
+            return null;
+        if (worldDirection.lengthSqr() < 1.0E-6)
+            return Vec3.ZERO;
+
+        SubLevel subLevel = Sable.HELPER.getContaining(blockEntity);
+        if (subLevel == null)
+            return worldDirection.normalize();
+
+        Pose3d pose = subLevel.logicalPose();
+        Vec3 vec = pose.transformNormalInverse(worldDirection);
         return vec.normalize();
     }
 
