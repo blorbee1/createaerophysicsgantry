@@ -9,7 +9,7 @@ public class ServerConfig {
 
     public static final ModConfigSpec.IntValue BELT_WHEEL_MAX_DISTANCE = BUILDER
             .comment("Maximum allowed link distance for Belt Wheel (hard capped at 64 blocks)")
-            .defineInRange("beltWheelMaxDistance", 64, 1, 64);
+            .defineInRange("beltWheelMaxDistance", 16, 1, 64);
 
     private static final ModConfigSpec SPEC = BUILDER.build();
 
