@@ -5,7 +5,10 @@ import com.blorbee.createaerophysicsgantry.util.SubLevelBlockEntityCollector;
 import com.mojang.logging.LogUtils;
 import com.simibubi.create.AllBlocks;
 import com.simibubi.create.content.kinetics.base.GeneratingKineticBlockEntity;
+import dev.ryanhcode.sable.api.physics.PhysicsPipeline;
+import dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
+import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -23,6 +26,8 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.Vec3;
+import org.joml.Quaterniond;
+import org.joml.Vector3d;
 import org.slf4j.Logger;
 
 import javax.annotation.Nullable;
@@ -40,6 +45,10 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
     private static final int REBASE_WINDOW_TICKS = 40;
     private static final int REMOVED_GRACE_TICKS = 20;
     private static final float STRAIN_START = 0.5f;
+
+    private static final double PULL_ACCEL = 12;
+    private static final double PULL_DAMPING = 4;
+    private static final boolean PULL_FORCE_IS_LOCAL = true;
 
     private static final Map<UUID, Long> REMOVED_WHEELS = new ConcurrentHashMap<>();
     private static final Map<Level, Set<BeltWheelBlockEntity>> INDEXED_WHEELS = new WeakHashMap<>();
@@ -282,18 +291,20 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
             return;
         }
 
+        double distance = Math.sqrt(distanceSqr);
+        applyStrainForce(other, a, b, distance);
+
         if (++geometryTick % GEOMETRY_CHECK_INTERVAL != 0)
             return;
 
         if (restLength < 0) {
-            setRestLength(Math.sqrt(distanceSqr));
+            setRestLength(distance);
         }
 
         Geometry geometry = evalulateGeometry(this, other, restLength);
         if (geometry == Geometry.LENGTH && level.getGameTime() <= rebaseUntil &&
             Math.abs(distanceSqr - (restLength * restLength)) <= REBASE_MAX_CHANGE * REBASE_MAX_CHANGE
         ) {
-            double distance = Math.sqrt(distanceSqr);
             setRestLength(distance);
             other.setRestLength(distance);
             geometry = Geometry.OK;
@@ -414,6 +425,76 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
             if (!wheel.isRemoved() && id.equals(wheel.wheelId))
                 return wheel;
         return null;
+    }
+
+    public void applyStrainForce(BeltWheelBlockEntity other, Vec3 a, Vec3 b, double distance) {
+        if (restLength < 0 || level.getGameTime() <= rebaseUntil)
+            return;
+        if (!(level instanceof ServerLevel serverLevel))
+            return;
+
+        float strain = getStrain(distance);
+        if (strain <= 0f)
+            return;
+
+        SubLevel ownSub = SimulatedHelper.getContainingSubLevel(this);
+        SubLevel otherSub = SimulatedHelper.getContainingSubLevel(other);
+        if (ownSub == null && otherSub == null)
+            return;
+        if (ownSub != null && otherSub != null && ownSub.getUniqueId().equals(otherSub.getUniqueId()))
+            return;
+        if (endpointKey(this).compareTo(endpointKey(other)) > 0)
+            return;
+
+        ServerSubLevelContainer container = SubLevelContainer.getContainer(serverLevel);
+        if (container == null)
+            return;
+
+        PhysicsPipeline pipeline = container.physicsSystem().getPipeline();
+        Vec3 line = b.subtract(a);
+        double lenSqr = line.lengthSqr();
+        if (lenSqr < 1.0e-3)
+            return;
+
+        double len = Math.sqrt(lenSqr);
+        Vector3d dir = new Vector3d(line.x / len, line.y / len, line.z / len);
+
+        double massA = massOf(ownSub);
+        double massB = massOf(otherSub);
+        double effectiveMass = massA > 0 && massB > 0 ? massA * massB / (massA + massB) : Math.max(massA, massB);
+        if (effectiveMass <= 0)
+            return;
+
+        double maxForce = PULL_ACCEL * effectiveMass;
+        double sign = distance >= restLength ? 1 : -1;
+        double spring = sign * maxForce * strain * strain;
+
+        Vector3d vA = ownSub instanceof ServerSubLevel s ? pipeline.getLinearVelocity(s, new Vector3d()) : new Vector3d();
+        Vector3d vB = otherSub instanceof ServerSubLevel s ? pipeline.getLinearVelocity(s, new Vector3d()) : new Vector3d();
+
+        double separating = vB.sub(vA, new Vector3d()).dot(dir);
+        double damping = PULL_DAMPING * effectiveMass * strain * separating;
+
+        double magnitude = Math.clamp(spring + damping, -maxForce, maxForce);
+        Vector3d forceOnThis = new Vector3d(dir).mul(magnitude);
+
+        push(pipeline, ownSub, worldPosition, forceOnThis);
+        push(pipeline, otherSub, other.getBlockPos(), forceOnThis.negate(new Vector3d()));
+    }
+
+    private static double massOf(@Nullable SubLevel sub) {
+        return sub instanceof ServerSubLevel s ? s.getMassTracker().getMass() : 0;
+    }
+
+    private static void push(PhysicsPipeline pipeline, @Nullable SubLevel sub, BlockPos plotPos, Vector3d worldForce) {
+        if (!(sub instanceof ServerSubLevel server) || server.isRemoved())
+            return;
+
+        Vector3d force = new Vector3d(worldForce);
+        if (PULL_FORCE_IS_LOCAL)
+            new Quaterniond(server.logicalPose().orientation()).conjugate().transform(force);
+
+        pipeline.applyImpulse(server, new Vector3d(plotPos.getX() + 0.5, plotPos.getY() + 0.5, plotPos.getZ() + 0.5), force);
     }
 
     public static Geometry evalulateGeometry(BeltWheelBlockEntity a, BeltWheelBlockEntity b, double restLength) {
