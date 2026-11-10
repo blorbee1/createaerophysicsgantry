@@ -15,7 +15,7 @@ This runs on [NeoForge](https://neoforged.net/) only, its dependencies are liste
 **Supported Create versions:**
 | Create | Create Aeronautics | CAPG |
 | :--- | :--- | :--- |
-| 6.0.9+ | 1.3.0+ | 1.1.2 - latest |
+| 6.0.9+ | 1.3.0+ | 1.2.0 - latest |
 | 6.0.9+ | 1.3.0+ | 1.1.x |
 | 6.0.9+ | 1.3.0+ | 1.0.x |
 | 6.0.9+ | 1.2.1 | 1.0.0-1.0.1 |
