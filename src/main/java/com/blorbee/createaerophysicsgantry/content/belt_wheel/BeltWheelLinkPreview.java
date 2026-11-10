@@ -107,7 +107,7 @@ public class BeltWheelLinkPreview {
         }
 
         Vec3 end = target.getWorldAnchorPosition();
-        String error = BeltWheelBlock.checkNewLink(first, target);
+        BeltWheelBlock.LinkError error = BeltWheelBlock.checkNewLink(first, target);
         int color = error == null ? GREEN : RED;
 
         showOBB("belt_wheel_target", target, color);
@@ -119,7 +119,7 @@ public class BeltWheelLinkPreview {
             Component msg = error == null
                 ? Component.translatable(BeltWheelBlock.TRANSLATE_KEY_PREFIX + ".preview_ok", String.format("%.1f", start.distanceTo(end)))
                 .withStyle(ChatFormatting.GREEN)
-                : Component.translatable(error).withStyle(ChatFormatting.RED);
+                : error.message();
             player.displayClientMessage(msg, true);
         }
     }

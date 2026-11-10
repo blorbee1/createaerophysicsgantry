@@ -27,16 +27,21 @@ import org.slf4j.Logger;
 
 import javax.annotation.Nullable;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
     private static final int GEOMETRY_CHECK_INTERVAL = 5;
     private static final int GEOMETRY_GRACE_TICKS = 20;
+    private static final double MIN_STRETCH_BLOCKS = 2.5;
     private static final double STRETCH_FRACTION = 0.15;
-    private static final double STRETCH_SLACK = 0.25;
     private static final double MIN_AXIS_DOT = Math.cos(Math.toRadians(10));
     private static final double MAX_PLANE_OFFSET = 0.3;
-    private static final double REBASE_MAX_CHANGE = 1;
+    private static final double REBASE_MAX_CHANGE = 4;
+    private static final int REBASE_WINDOW_TICKS = 40;
+    private static final int REMOVED_GRACE_TICKS = 20;
+    private static final float STRAIN_START = 0.5f;
 
+    private static final Map<UUID, Long> REMOVED_WHEELS = new ConcurrentHashMap<>();
     private static final Map<Level, Set<BeltWheelBlockEntity>> INDEXED_WHEELS = new WeakHashMap<>();
 
     private static void indexWheel(BeltWheelBlockEntity be) {
@@ -73,12 +78,13 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
     private double restLength = -1;
     private int geometryTick;
     private int invalidTicks;
-    private boolean membershipKnown;
+    private long rebaseUntil;
+    private boolean indexed;
 
     @Nullable
-    private UUID lastOwnSubLevel;
+    private UUID wheelId;
     @Nullable
-    private UUID lastOtherSubLevel;
+    private UUID linkedWheelId;
 
     public enum Geometry {
         OK,
@@ -103,6 +109,12 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         super.tick();
         if (level == null || level.isClientSide)
             return;
+
+        if (!indexed) {
+            indexed = true;
+            indexWheel(this);
+            REMOVED_WHEELS.remove(ensureWheelId());
+        }
 
         boolean currentSourceState = isSource();
         boolean sourceChanged = currentSourceState != lastKnownSourceState;
@@ -209,13 +221,22 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         if (linked == null)
             return;
 
+        long now = level.getGameTime();
+
         BlockPos linkedCurrentPos = linked.getBlockPos();
         UUID linkedCurrentSubLevel = SimulatedHelper.getContainingSubLevelId(linked);
         if (!linkedCurrentPos.equals(linkedPos) || !Objects.equals(linkedCurrentSubLevel, linkedSubLevelId)) {
             linkedPos = linkedCurrentPos.immutable();
             linkedSubLevelId = linkedCurrentSubLevel;
+            rebaseUntil = now + REBASE_WINDOW_TICKS;
             setChanged();
             sendData();
+        }
+
+        UUID linkedId = linked.ensureWheelId();
+        if (!linkedId.equals(linkedWheelId)) {
+            linkedWheelId = linkedId;
+            setChanged();
         }
 
         BlockPos ourCurrentPos = worldPosition;
@@ -223,14 +244,28 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         if (!linked.references(ourCurrentPos, ourCurrentSubLevel)) {
             linked.linkedPos = ourCurrentPos.immutable();
             linked.linkedSubLevelId = ourCurrentSubLevel;
+            linked.rebaseUntil = now + REBASE_WINDOW_TICKS;
+            rebaseUntil = now + REBASE_WINDOW_TICKS;
             linked.setChanged();
             linked.sendData();
+        }
+
+        UUID ourId = ensureWheelId();
+        if (!ourId.equals(linked.linkedWheelId)) {
+            linked.linkedWheelId = ourId;
+            linked.setChanged();
         }
     }
 
     private void validateLinkDistanceAndBreakIfInvalid() {
         BeltWheelBlockEntity other = resolveLinkedWheel();
         if (other == null || other.isRemoved()) {
+            // only break if the link was actually removed and never came back (not unloaded)
+            Long removedAt = linkedWheelId == null ? null : REMOVED_WHEELS.get(linkedWheelId);
+            if (removedAt != null && level.getGameTime() - removedAt > REMOVED_GRACE_TICKS) {
+                REMOVED_WHEELS.remove(linkedWheelId);
+                breakLink(false);
+            }
             return;
         }
 
@@ -241,8 +276,8 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         }
 
         double distanceSqr = a.distanceToSqr(b);
-        double maxDistanceSqr = (BeltWheelBlock.getConfiguredMaxDistance() + 0.01) * (BeltWheelBlock.getConfiguredMaxDistance() + 0.01);
-        if (distanceSqr < 0.01 || distanceSqr > maxDistanceSqr) {
+        double maxDistance = BeltWheelBlock.getConfiguredMaxDistance() + 0.01;
+        if (distanceSqr < 0.01 || distanceSqr > maxDistance * maxDistance) {
             breakLink(true);
             return;
         }
@@ -250,23 +285,17 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         if (++geometryTick % GEOMETRY_CHECK_INTERVAL != 0)
             return;
 
-        UUID ownSub = SimulatedHelper.getContainingSubLevelId(this);
-        UUID otherSub = SimulatedHelper.getContainingSubLevelId(other);
-
-        boolean membershipChanged = membershipKnown && (!Objects.equals(ownSub, lastOwnSubLevel) || !Objects.equals(otherSub, lastOtherSubLevel));
-        membershipKnown = true;
-        lastOwnSubLevel = ownSub;
-        lastOtherSubLevel = otherSub;
-
         if (restLength < 0) {
-            restLength = Math.sqrt(distanceSqr);
-            setChanged();
+            setRestLength(Math.sqrt(distanceSqr));
         }
 
         Geometry geometry = evalulateGeometry(this, other, restLength);
-        if (membershipChanged && geometry == Geometry.LENGTH && Math.abs(distanceSqr - (restLength * restLength)) <= REBASE_MAX_CHANGE * REBASE_MAX_CHANGE) {
-            restLength = Math.sqrt(distanceSqr);
-            setChanged();
+        if (geometry == Geometry.LENGTH && level.getGameTime() <= rebaseUntil &&
+            Math.abs(distanceSqr - (restLength * restLength)) <= REBASE_MAX_CHANGE * REBASE_MAX_CHANGE
+        ) {
+            double distance = Math.sqrt(distanceSqr);
+            setRestLength(distance);
+            other.setRestLength(distance);
             geometry = Geometry.OK;
         }
 
@@ -284,6 +313,8 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         restLength = length;
         invalidTicks = 0;
         setChanged();
+        if (level != null && !level.isClientSide)
+            sendData();
     }
 
     @Override
@@ -345,6 +376,10 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         receivesFromLinkedWheel = false;
         generatedLinkSpeed = 0.0F;
         linkValidated = false;
+        linkedWheelId = null;
+        restLength = -1;
+        invalidTicks = 0;
+        rebaseUntil = 0;
 
         updateGeneratedRotation();
         setChanged();
@@ -353,6 +388,32 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
 
     public boolean references(BlockPos pos, @Nullable UUID subLevelId) {
         return linkedPos != null && linkedPos.equals(pos) && Objects.equals(linkedSubLevelId, subLevelId);
+    }
+
+    public UUID ensureWheelId() {
+        if (wheelId == null) {
+            wheelId = UUID.randomUUID();
+            setChanged();
+        }
+        return wheelId;
+    }
+
+    public void bindPartnerId(UUID id) {
+        linkedWheelId = id;
+        setChanged();
+    }
+
+    public void onBlockRemoved() {
+        if (level != null && !level.isClientSide && wheelId != null)
+            REMOVED_WHEELS.put(wheelId, level.getGameTime());
+    }
+
+    @Nullable
+    private BeltWheelBlockEntity findWheelById(UUID id) {
+        for (BeltWheelBlockEntity wheel : getAllKnownBeltWheels())
+            if (!wheel.isRemoved() && id.equals(wheel.wheelId))
+                return wheel;
+        return null;
     }
 
     public static Geometry evalulateGeometry(BeltWheelBlockEntity a, BeltWheelBlockEntity b, double restLength) {
@@ -375,11 +436,28 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
             return Geometry.PLANE;
 
         if (restLength >= 0) {
-            double slack = restLength * STRETCH_FRACTION + STRETCH_SLACK;
-            if (lenSqr > (restLength + slack) * (restLength + slack) || lenSqr < (restLength - slack) * (restLength - slack))
+            double len = Math.sqrt(lenSqr);
+            double tolerance = stretchTolerance(restLength);
+            if (len > restLength + tolerance || len < restLength - tolerance)
                 return Geometry.LENGTH;
         }
         return Geometry.OK;
+    }
+
+    public static double stretchTolerance(double rest) {
+        return Math.max(MIN_STRETCH_BLOCKS, rest * STRETCH_FRACTION);
+    }
+
+    // 0 = relaxes, 1 = at the break limit
+    public float getStrain(double distance) {
+        if (restLength < 0)
+            return 0f;
+        double tolerance = stretchTolerance(restLength);
+        double limit = distance >= restLength
+            ? Math.clamp(BeltWheelBlock.getConfiguredMaxDistance() - restLength, 0.1, tolerance)
+            : Math.clamp(restLength - 0.1, 0.1, tolerance);
+        double t = Math.abs(distance - restLength) / limit;
+        return (float) Math.clamp((t - STRAIN_START) / (1.0 - STRAIN_START), 0, 1);
     }
 
     @Nullable
@@ -390,9 +468,13 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         return world == null || world.lengthSqr() < 1.0e-6 ? null : world;
     }
 
-    public void breakLink(boolean notifyOther) {
+    public boolean breakLink(boolean notifyOther) {
+        return breakLink(notifyOther, true);
+    }
+
+    public boolean breakLink(boolean notifyOther, boolean dropBelt) {
         if (!hasLinkedTarget())
-            return;
+            return false;
 
         Vec3 start = getWorldAnchorPosition();
         Vec3 end = getLinkedWorldAnchorPosition();
@@ -400,22 +482,30 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         if (notifyOther && level != null && linkedPos != null) {
             BeltWheelBlockEntity other = resolveLinkedWheel();
             if (other != null && !other.isRemoved()) {
-                other.breakLink(false);
+                other.breakLink(false, false);
             }
         }
 
-        if (level instanceof ServerLevel serverLevel && start != null && end != null) {
-            playBeltBreakEffects(serverLevel, start, end);
+        if (level instanceof ServerLevel serverLevel && start != null) {
+            if (end != null)
+                playBeltBreakEffects(serverLevel, start, end);
+            if (dropBelt)
+                BeltWheelBlock.dropBelt(serverLevel, start);
         }
 
         linkedPos = null;
         linkedSubLevelId = null;
         receivesFromLinkedWheel = false;
         generatedLinkSpeed = 0.0F;
+        restLength = -1;
+        invalidTicks = 0;
+        rebaseUntil = 0;
+        geometryTick = 0;
 
         updateGeneratedRotation();
         setChanged();
         sendData();
+        return true;
     }
 
     private void validateLink() {
@@ -534,7 +624,7 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
             }
         }
 
-        return null;
+        return linkedWheelId == null ? null : findWheelById(linkedWheelId);
     }
 
     public Vec3 getWorldAnchorPosition() {
@@ -608,8 +698,11 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
     @Override
     public void onLoad() {
         super.onLoad();
-        if (level != null && !level.isClientSide)
+        if (level != null && !level.isClientSide) {
+            REMOVED_WHEELS.remove(ensureWheelId());
             indexWheel(this);
+            indexed = true;
+        }
     }
 
     @Override
@@ -632,6 +725,12 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
             tag.putLong("LinkedPos", linkedPos.asLong());
         if (linkedSubLevelId != null)
             tag.putUUID("LinkedSubLevelId", linkedSubLevelId);
+        if (restLength >= 0)
+            tag.putDouble("RestLength", restLength);
+        if (wheelId != null)
+            tag.putUUID("WheelId", wheelId);
+        if (linkedWheelId != null)
+            tag.putUUID("LinkedWheelId", linkedWheelId);
 
         tag.putBoolean("ReceivesFromLinkedWheel", receivesFromLinkedWheel);
         tag.putFloat("GeneratedLinkSpeed", generatedLinkSpeed);
@@ -643,6 +742,10 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
 
         linkedPos = tag.contains("LinkedPos") ? BlockPos.of(tag.getLong("LinkedPos")) : null;
         linkedSubLevelId = tag.contains("LinkedSubLevelId") ? tag.getUUID("LinkedSubLevelId") : null;
+        restLength = tag.contains("RestLength") ? tag.getDouble("RestLength") : -1.0;
+        wheelId = tag.hasUUID("WheelId") ? tag.getUUID("WheelId") : null;
+        linkedWheelId = tag.hasUUID("LinkedWheelId") ? tag.getUUID("LinkedWheelId") : null;
+
         receivesFromLinkedWheel = tag.getBoolean("ReceivesFromLinkedWheel");
         generatedLinkSpeed = tag.contains("GeneratedLinkSpeed") ? tag.getFloat("GeneratedLinkSpeed") : 0.0F;
 

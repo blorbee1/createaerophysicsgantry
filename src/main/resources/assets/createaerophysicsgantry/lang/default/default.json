@@ -4,7 +4,7 @@
   "createaerophysicsgantry.belt_wheel.link_missing": "The selected belt wheel is no longer available.",
   "createaerophysicsgantry.belt_wheel.link_self": "Cannot link a belt wheel to itself.",
   "createaerophysicsgantry.belt_wheel.axis_mismatch": "Belt wheels must share the same rotation axis.",
-  "createaerophysicsgantry.belt_wheel.distance_invalid": "Belt wheel distance is out of range (max %s blocks).",
+  "createaerophysicsgantry.belt_wheel.distance_invalid": "Wheels must be within %s blocks of each other",
   "createaerophysicsgantry.belt_wheel.not_straight": "Belt wheels must be in a straight line.",
   "createaerophysicsgantry.belt_wheel.link_success": "Belt wheel link created.",
   "createaerophysicsgantry.belt_wheel.link_broken": "Belt wheel link severed.",

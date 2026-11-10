@@ -75,7 +75,8 @@ public class BeltWheelRenderer extends KineticBlockEntityRenderer<BeltWheelBlock
                     Vec3 end = endFrame.subtract(origin);
 
                     if (isRenderableLocalEndpoint(start) && isRenderableLocalEndpoint(end) && !(start.distanceToSqr(end) > 9216.0)) {
-                        renderLoopBelt(be, ms, buffer, start, end, be.getBlockState().getValue(BlockStateProperties.AXIS), startWorld, endWorld, overlay);
+                        float strain = be.getStrain(distance);
+                        renderLoopBelt(be, ms, buffer, start, end, be.getBlockState().getValue(BlockStateProperties.AXIS), startWorld, endWorld, overlay, strain);
                     }
                 }
             }
@@ -126,7 +127,7 @@ public class BeltWheelRenderer extends KineticBlockEntityRenderer<BeltWheelBlock
         Vec3 start, Vec3 end,
         Direction.Axis axis,
         Vec3 startWorld, Vec3 endWorld,
-        int overlay
+        int overlay, float strain
     ) {
         Vec3 axisVec = switch (axis) {
             case X -> new Vec3(1.0, 0.0, 0.0);
@@ -198,7 +199,7 @@ public class BeltWheelRenderer extends KineticBlockEntityRenderer<BeltWheelBlock
                         int lightTo = LevelRenderer.getLightColor(be.getLevel(), BlockPos.containing(toWorld));
 
                         renderBeltSegment(ms, beltConsumer, from, to, axisVec, uvCursor, uvCursor + segmentLength,
-                            lightFrom, lightTo, far, overlay);
+                            lightFrom, lightTo, far, overlay, strain);
                         uvCursor += segmentLength * directionSign;
                     }
                 }
@@ -224,7 +225,7 @@ public class BeltWheelRenderer extends KineticBlockEntityRenderer<BeltWheelBlock
         float minV, float maxV,
         int lightFrom, int lightTo,
         boolean far,
-        int overlay
+        int overlay, float strain
     ) {
         Vec3 delta = to.subtract(from);
         if (!(delta.lengthSqr() <= 1.0E-10)) {
@@ -260,12 +261,12 @@ public class BeltWheelRenderer extends KineticBlockEntityRenderer<BeltWheelBlock
             float uvEnd = maxV;
             float widthU = 0.5F;
 
-            renderFace(ms, consumer, p001, p101, p111, p011, uvStart, uvEnd, 0.0F, widthU, lightFrom, lightTo, overlay);
-            renderFace(ms, consumer, p000, p100, p110, p010, uvStart, uvEnd, 0.0F, widthU, lightFrom, lightTo, overlay);
-            renderFace(ms, consumer, p000, p100, p101, p001, uvStart, uvEnd, 0.0F, widthU, lightFrom, lightTo, overlay);
-            renderFace(ms, consumer, p010, p110, p111, p011, uvStart, uvEnd, 0.0F, widthU, lightFrom, lightTo, overlay);
-            renderFace(ms, consumer, p000, p001, p011, p010, 0.0F, widthU, 0.0F, widthU, lightFrom, lightTo, overlay);
-            renderFace(ms, consumer, p100, p110, p111, p101, 0.0F, widthU, 0.0F, widthU, lightFrom, lightTo, overlay);
+            renderFace(ms, consumer, p001, p101, p111, p011, uvStart, uvEnd, 0.0F, widthU, lightFrom, lightTo, overlay, strain);
+            renderFace(ms, consumer, p000, p100, p110, p010, uvStart, uvEnd, 0.0F, widthU, lightFrom, lightTo, overlay, strain);
+            renderFace(ms, consumer, p000, p100, p101, p001, uvStart, uvEnd, 0.0F, widthU, lightFrom, lightTo, overlay, strain);
+            renderFace(ms, consumer, p010, p110, p111, p011, uvStart, uvEnd, 0.0F, widthU, lightFrom, lightTo, overlay, strain);
+            renderFace(ms, consumer, p000, p001, p011, p010, 0.0F, widthU, 0.0F, widthU, lightFrom, lightTo, overlay, strain);
+            renderFace(ms, consumer, p100, p110, p111, p101, 0.0F, widthU, 0.0F, widthU, lightFrom, lightTo, overlay, strain);
         }
     }
 
@@ -276,7 +277,7 @@ public class BeltWheelRenderer extends KineticBlockEntityRenderer<BeltWheelBlock
         float minU, float maxU,
         float minV, float maxV,
         int lightFrom, int lightTo,
-        int overlay
+        int overlay, float strain
     ) {
         Matrix4f pose = ms.last().pose();
         PoseStack.Pose normalPose = ms.last();
@@ -289,14 +290,14 @@ public class BeltWheelRenderer extends KineticBlockEntityRenderer<BeltWheelBlock
         }
 
         Vec3 backNormal = new Vec3(-normal.x, -normal.y, -normal.z);
-        addVertex(pose, normalPose, consumer, a, minU, minV, normal, lightFrom, overlay);
-        addVertex(pose, normalPose, consumer, b, maxU, minV, normal, lightFrom, overlay);
-        addVertex(pose, normalPose, consumer, c, maxU, maxV, normal, lightTo, overlay);
-        addVertex(pose, normalPose, consumer, d, minU, maxV, normal, lightTo, overlay);
-        addVertex(pose, normalPose, consumer, d, minU, maxV, backNormal, lightTo, overlay);
-        addVertex(pose, normalPose, consumer, c, maxU, maxV, backNormal, lightTo, overlay);
-        addVertex(pose, normalPose, consumer, b, maxU, minV, backNormal, lightFrom, overlay);
-        addVertex(pose, normalPose, consumer, a, minU, minV, backNormal, lightFrom, overlay);
+        addVertex(pose, normalPose, consumer, a, minU, minV, normal, lightFrom, overlay, strain);
+        addVertex(pose, normalPose, consumer, b, maxU, minV, normal, lightFrom, overlay, strain);
+        addVertex(pose, normalPose, consumer, c, maxU, maxV, normal, lightTo, overlay, strain);
+        addVertex(pose, normalPose, consumer, d, minU, maxV, normal, lightTo, overlay, strain);
+        addVertex(pose, normalPose, consumer, d, minU, maxV, backNormal, lightTo, overlay, strain);
+        addVertex(pose, normalPose, consumer, c, maxU, maxV, backNormal, lightTo, overlay, strain);
+        addVertex(pose, normalPose, consumer, b, maxU, minV, backNormal, lightFrom, overlay, strain);
+        addVertex(pose, normalPose, consumer, a, minU, minV, backNormal, lightFrom, overlay, strain);
     }
 
     private static void addVertex(
@@ -306,10 +307,11 @@ public class BeltWheelRenderer extends KineticBlockEntityRenderer<BeltWheelBlock
         Vec3 pos,
         float u, float v,
         Vec3 normal,
-        int light, int overlay
+        int light, int overlay, float strain
     ) {
+        float green = 1f - 0.85f * strain;
         consumer.addVertex(pose, (float)pos.x, (float)pos.y, (float)pos.z)
-            .setColor(1.0F, 1.0F, 1.0F, 1.0F)
+            .setColor(1.0F, green, green, 1.0F)
             .setUv(u, v)
             .setOverlay(overlay)
             .setLight(light)

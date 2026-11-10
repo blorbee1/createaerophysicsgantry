@@ -3,6 +3,8 @@ package com.blorbee.createaerophysicsgantry.content.belt_wheel;
 import com.blorbee.createaerophysicsgantry.compat.simulated.SimulatedHelper;
 import com.blorbee.createaerophysicsgantry.config.ServerConfig;
 import com.blorbee.createaerophysicsgantry.registry.CAPGBlockEntityTypes;
+import com.simibubi.create.AllItems;
+import com.simibubi.create.content.equipment.wrench.IWrenchable;
 import com.simibubi.create.content.kinetics.base.RotatedPillarKineticBlock;
 import com.simibubi.create.content.kinetics.belt.item.BeltConnectorItem;
 import com.simibubi.create.content.kinetics.simpleRelays.ICogWheel;
@@ -17,13 +19,16 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.ShearsItem;
 import net.minecraft.world.item.component.CustomData;
+import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Block;
@@ -39,7 +44,7 @@ import javax.annotation.Nullable;
 import java.util.Objects;
 import java.util.UUID;
 
-public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<BeltWheelBlockEntity>, ICogWheel {
+public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<BeltWheelBlockEntity>, ICogWheel, IWrenchable {
     public static final String TRANSLATE_KEY_PREFIX = "createaerophysicsgantry.belt_wheel";
     private static final String SELECTION_TAG = "BeltWheelFirst";
 
@@ -47,6 +52,16 @@ public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<Bel
     public static final BooleanProperty BOTTOM_SHAFT = BooleanProperty.create("bottom_shaft");
 
     public record Selection(BlockPos pos, @Nullable UUID subLevel, long expiresAt) {}
+
+    public record LinkError(String key, Object... args) {
+        public Component message() {
+            return Component.translatable(key, args).withStyle(ChatFormatting.RED);
+        }
+
+        public static LinkError basic(String key) {
+            return new LinkError(TRANSLATE_KEY_PREFIX + "." + key);
+        }
+    }
 
     public BeltWheelBlock(Properties properties) {
         super(properties);
@@ -85,38 +100,56 @@ public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<Bel
         }
     }
 
+    @Override
+    public InteractionResult onWrenched(BlockState state, UseOnContext context) {
+        Level level = context.getLevel();
+        if (level.getBlockEntity(context.getClickedPos()) instanceof BeltWheelBlockEntity be && be.hasLinkedTarget()) {
+            if (!level.isClientSide) {
+                be.breakLink(true, false);
+
+                Player player = context.getPlayer();
+                if (player != null) {
+                    player.getInventory().placeItemBackInInventory(AllItems.BELT_CONNECTOR.asStack());
+                    notify(player, TRANSLATE_KEY_PREFIX + ".link_broken", ChatFormatting.YELLOW);
+                }
+            }
+            return InteractionResult.sidedSuccess(level.isClientSide);
+        }
+        return super.onWrenched(state, context);
+    }
+
     @Nullable
-    public static String checkNewLink(BeltWheelBlockEntity first, BeltWheelBlockEntity second) {
+    public static LinkError checkNewLink(BeltWheelBlockEntity first, BeltWheelBlockEntity second) {
         Vec3 a = first.getWorldAnchorPosition();
         Vec3 b = second.getWorldAnchorPosition();
         if (a == null || b == null)
-            return TRANSLATE_KEY_PREFIX + ".link_missing";
+            return LinkError.basic("link_missing");
 
         Vec3 delta = b.subtract(a);
         double distanceSqr = delta.lengthSqr();
         int max = getConfiguredMaxDistance();
         if (distanceSqr <= 0.01 || distanceSqr > max * max)
-            return TRANSLATE_KEY_PREFIX + ".distance_invalid";
+            return new LinkError(TRANSLATE_KEY_PREFIX + ".distance_invalid", max);
 
         BeltWheelBlockEntity.Geometry geometry = BeltWheelBlockEntity.evalulateGeometry(first, second, -1);
         if (geometry == BeltWheelBlockEntity.Geometry.AXES)
-            return TRANSLATE_KEY_PREFIX + ".axes_not_parallel";
+            return LinkError.basic("axes_not_parallel");
         if (geometry == BeltWheelBlockEntity.Geometry.PLANE)
-            return TRANSLATE_KEY_PREFIX + ".not_coplanar";
+            return LinkError.basic("not_coplanar");
         if (geometry != BeltWheelBlockEntity.Geometry.OK)
-            return TRANSLATE_KEY_PREFIX + ".link_missing";
+            return LinkError.basic("link_missing");
 
         Vec3 localA = SimulatedHelper.toContainingLocalDirection(first, delta);
         Vec3 localB = SimulatedHelper.toContainingLocalDirection(second, delta);
         boolean alignedA = isAxisAligned(localA);
         boolean alignedB = isAxisAligned(localB);
         if (!alignedA && !alignedB)
-            return TRANSLATE_KEY_PREFIX + ".not_straight";
+            return LinkError.basic("not_straight");
 
         boolean okA = alignedA && getConnectionAxis(localA) != first.getBlockState().getValue(AXIS);
         boolean okB = alignedB && getConnectionAxis(localB) != second.getBlockState().getValue(AXIS);
         if (!okA && !okB)
-            return TRANSLATE_KEY_PREFIX + ".axis_mismatch";
+            return LinkError.basic("axis_mismatch");
 
         return null;
     }
@@ -151,10 +184,10 @@ public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<Bel
             return ItemInteractionResult.SUCCESS;
         }
 
-        String error = checkNewLink(firstWheel, clickedWheel);
+        LinkError error = checkNewLink(firstWheel, clickedWheel);
         if (error != null) {
             writeSelection(stack, null);
-            notify(player, error, ChatFormatting.RED);
+            notify(player, error.message());
             return ItemInteractionResult.FAIL;
         }
 
@@ -170,6 +203,9 @@ public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<Bel
         firstWheel.setRestLength(rest);
         clickedWheel.setRestLength(rest);
 
+        firstWheel.bindPartnerId(clickedWheel.ensureWheelId());
+        clickedWheel.bindPartnerId(firstWheel.ensureWheelId());
+
         level.playSound(null, clickedWheel.getBlockPos(), SoundEvents.WOOD_PLACE, SoundSource.BLOCKS, 1f, 1f);
         level.playSound(null, firstWheel.getBlockPos(), SoundEvents.WOOD_PLACE, SoundSource.BLOCKS, 1f, 1f);
 
@@ -179,6 +215,12 @@ public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<Bel
 
         notify(player, TRANSLATE_KEY_PREFIX + ".link_success", ChatFormatting.GREEN);
         return ItemInteractionResult.SUCCESS;
+    }
+
+    public static void dropBelt(Level level, Vec3 at) {
+        ItemEntity item = new ItemEntity(level, at.x, at.y + 1, at.z, AllItems.BELT_CONNECTOR.asStack());
+        item.setDefaultPickUpDelay();
+        level.addFreshEntity(item);
     }
 
     @Nullable
@@ -229,6 +271,10 @@ public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<Bel
         player.displayClientMessage(msg, true);
     }
 
+    private static void notify(Player player, Component msg) {
+        player.displayClientMessage(msg, true);
+    }
+
     public static int getConfiguredMaxDistance() {
         int configured = ServerConfig.BELT_WHEEL_MAX_DISTANCE.get();
         return Math.clamp(configured, 1, 64);
@@ -241,7 +287,7 @@ public class BeltWheelBlock extends RotatedPillarKineticBlock implements IBE<Bel
     @Override
     public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
         if (!state.is(newState.getBlock()) && !isMoving) {
-            withBlockEntityDo(level, pos, be -> be.breakLink(true));
+            withBlockEntityDo(level, pos, BeltWheelBlockEntity::onBlockRemoved);
         }
         super.onRemove(state, level, pos, newState, isMoving);
     }
