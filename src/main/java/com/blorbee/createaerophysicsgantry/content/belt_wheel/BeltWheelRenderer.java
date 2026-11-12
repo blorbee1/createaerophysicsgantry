@@ -63,8 +63,11 @@ public class BeltWheelRenderer extends KineticBlockEntityRenderer<BeltWheelBlock
         if (be.shouldRenderLinkFromThisEndpoint()) {
             BeltWheelBlockEntity linkedWheel = be.resolveLinkedWheel();
             if (linkedWheel != null) {
+                // used for when rendering the ponder
+                Vec3 shift = BeltWheelRenderOffsets.get(linkedWheel, partialTicks).subtract(BeltWheelRenderOffsets.get(be, partialTicks));
+
                 Vec3 startWorld = be.getWorldAnchorPosition();
-                Vec3 endWorld = linkedWheel.getWorldAnchorPosition();
+                Vec3 endWorld = linkedWheel.getWorldAnchorPosition().add(shift);
                 double distance = startWorld.distanceTo(endWorld);
 
                 if (!(distance < 0.01)) {
@@ -72,7 +75,7 @@ public class BeltWheelRenderer extends KineticBlockEntityRenderer<BeltWheelBlock
                     Vec3 startFrame = be.getAnchorPositionInRenderFrameOf(be);
                     Vec3 endFrame = linkedWheel.getAnchorPositionInRenderFrameOf(be);
                     Vec3 start = startFrame.subtract(origin);
-                    Vec3 end = endFrame.subtract(origin);
+                    Vec3 end = endFrame.subtract(origin).add(shift);
 
                     if (isRenderableLocalEndpoint(start) && isRenderableLocalEndpoint(end) && !(start.distanceToSqr(end) > 9216.0)) {
                         float strain = be.getStrain(distance);

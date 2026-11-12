@@ -1,12 +1,16 @@
 package com.blorbee.createaerophysicsgantry.ponder.scenes;
 
 import com.blorbee.createaerophysicsgantry.content.belt_wheel.BeltWheelBlockEntity;
+import com.blorbee.createaerophysicsgantry.content.belt_wheel.BeltWheelRenderOffsets;
 import com.blorbee.createaerophysicsgantry.registry.CAPGBlocks;
 import com.simibubi.create.AllItems;
 import com.simibubi.create.foundation.ponder.CreateSceneBuilder;
 import dev.simulated_team.simulated.ponder.instructions.PullTheAssemblerKronkInstruction;
+import net.createmod.catnip.animation.AnimationTickHolder;
 import net.createmod.catnip.math.Pointing;
 import net.createmod.ponder.api.PonderPalette;
+import net.createmod.ponder.api.element.ElementLink;
+import net.createmod.ponder.api.element.WorldSectionElement;
 import net.createmod.ponder.api.scene.SceneBuilder;
 import net.createmod.ponder.api.scene.SceneBuildingUtil;
 import net.minecraft.core.BlockPos;
@@ -14,6 +18,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 public class BeltWheelScenes {
     public static void connecting(SceneBuilder builder, SceneBuildingUtil util) {
@@ -99,7 +104,7 @@ public class BeltWheelScenes {
         scene.idle(25);
 
         scene.overlay().showText(60)
-            .text("You can unlink two belt wheels with Shears on either Belt Wheel")
+            .text("You can unlink two belt wheels with Shears or a Wrench on either Belt Wheel")
             .attachKeyFrame()
             .placeNearTarget()
             .pointAt(util.vector().centerOf(beltWheelMainB));
@@ -111,9 +116,9 @@ public class BeltWheelScenes {
         scene.idle(20);
 
         scene.world().modifyBlockEntity(beltWheelMainA, BeltWheelBlockEntity.class,
-            b -> b.breakLink(false));
+            b -> b.breakLink(false, false));
         scene.world().modifyBlockEntity(beltWheelMainB, BeltWheelBlockEntity.class,
-            b -> b.breakLink(false));
+            b -> b.breakLink(false, false));
 
         scene.idle(30);
 
@@ -164,7 +169,7 @@ public class BeltWheelScenes {
         scene.idle(10);
 
         scene.overlay().showText(80)
-            .text("Belt Wheels can also connect to across different Simulated Contraptions.")
+            .text("Belt Wheels can also connect across different Simulated Contraptions.")
             .attachKeyFrame()
             .placeNearTarget()
             .pointAt(util.vector().centerOf(assembler));
@@ -265,5 +270,96 @@ public class BeltWheelScenes {
         scene.idle(45);
 
         scene.markAsFinished();
+    }
+
+    public static void strain(SceneBuilder builder, SceneBuildingUtil util) {
+        CreateSceneBuilder scene = new CreateSceneBuilder(builder);
+        scene.title("belt_wheel_strain", "Stretching Belt Wheels");
+        scene.configureBasePlate(1, 0, 5);
+
+        BlockPos wheelA = util.grid().at(5, 1, 2);
+        BlockPos wheelB = util.grid().at(1, 1, 2);
+        ItemStack beltItem = AllItems.BELT_CONNECTOR.asStack();
+        Vec3 beltMiddle = util.vector().of(3.5, 1.5, 2.5);
+
+        scene.world().showSection(util.select().layer(0), Direction.UP);
+        scene.idle(10);
+        scene.world().showSection(util.select().position(wheelB), Direction.DOWN);
+        ElementLink<WorldSectionElement> movingWheel =
+            scene.world().showIndependentSection(util.select().position(wheelA), Direction.DOWN);
+        scene.idle(10);
+
+        linkWithRest(scene, wheelA, wheelB, 4.0);
+
+        scene.overlay().showText(70)
+            .attachKeyFrame()
+            .text("A belt remembers the distance it was connected at and can stretch a little beyond it")
+            .placeNearTarget()
+            .pointAt(beltMiddle);
+        scene.idle(80);
+
+        scene.overlay().showText(90)
+            .attachKeyFrame()
+            .colored(PonderPalette.RED)
+            .text("The more it stretches, the redder it gets, until it's about to snap")
+            .placeNearTarget()
+            .pointAt(beltMiddle);
+        moveWheel(scene, movingWheel, wheelA, new Vec3(2.4, 0, 0), 80);
+        scene.idle(10);
+
+        breakNoDrop(scene, wheelA);
+        breakNoDrop(scene, wheelB);
+        scene.overlay().showText(60)
+            .attachKeyFrame()
+            .colored(PonderPalette.RED)
+            .text("Pull too far and it snaps")
+            .placeNearTarget()
+            .pointAt(util.vector().centerOf(wheelA).add(2.4, 0, 0));
+        scene.idle(70);
+
+        scene.world().hideIndependentSection(movingWheel, Direction.UP);
+        scene.idle(15);
+        scene.world().modifyBlockEntity(wheelA, BeltWheelBlockEntity.class, BeltWheelRenderOffsets::clear);
+        movingWheel = scene.world().showIndependentSection(util.select().position(wheelA), Direction.DOWN);
+        scene.idle(10);
+        linkWithRest(scene, wheelA, wheelB, 4.0);
+
+        scene.overlay().showText(80)
+            .attachKeyFrame()
+            .colored(PonderPalette.GREEN)
+            .text("Pushing the wheels closer together never strains the belt")
+            .placeNearTarget()
+            .pointAt(beltMiddle);
+        moveWheel(scene, movingWheel, wheelA, new Vec3(-2.0, 0, 0), 60);
+        scene.idle(30);
+
+        scene.overlay().showText(90)
+            .attachKeyFrame()
+            .text("On simulated contraptions, a stretched belt also pulls back and harder the closer it is to snapping")
+            .placeNearTarget()
+            .pointAt(beltMiddle);
+        scene.idle(100);
+
+        scene.markAsFinished();
+    }
+
+    private static void moveWheel(CreateSceneBuilder scene, ElementLink<WorldSectionElement> link, BlockPos wheel, Vec3 total, int ticks) {
+        Vec3 step = total.scale(1f / ticks);
+        for (int i = 1; i <= ticks; i++) {
+            Vec3 absolute = total.scale((double) i / ticks);
+            scene.world().moveSection(link, step, 1);
+            scene.world().modifyBlockEntity(wheel, BeltWheelBlockEntity.class, w -> BeltWheelRenderOffsets.set(w, absolute));
+            scene.idle(1);
+        }
+        scene.world().modifyBlockEntity(wheel, BeltWheelBlockEntity.class, w -> BeltWheelRenderOffsets.set(w, total));
+    }
+
+    private static void linkWithRest(CreateSceneBuilder scene, BlockPos a, BlockPos b, double rest) {
+        scene.world().modifyBlockEntity(a, BeltWheelBlockEntity.class, w -> { w.setLinkedTarget(b, null); w.setRestLength(rest); });
+        scene.world().modifyBlockEntity(b, BeltWheelBlockEntity.class, w -> { w.setLinkedTarget(a, null); w.setRestLength(rest); });
+    }
+
+    private static void breakNoDrop(CreateSceneBuilder scene, BlockPos wheel) {
+        scene.world().modifyBlockEntity(wheel, BeltWheelBlockEntity.class, w -> w.breakLink(false, false));
     }
 }

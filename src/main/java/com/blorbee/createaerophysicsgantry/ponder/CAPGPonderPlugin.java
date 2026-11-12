@@ -36,7 +36,8 @@ public class CAPGPonderPlugin implements PonderPlugin {
 
         HELPER.forComponents(CAPGBlocks.BELT_WHEEL)
             .addStoryBoard("belt_wheel/intro", BeltWheelScenes::connecting)
-            .addStoryBoard("belt_wheel/intro", BeltWheelScenes::relaying);
+            .addStoryBoard("belt_wheel/intro", BeltWheelScenes::relaying)
+            .addStoryBoard("belt_wheel/intro", BeltWheelScenes::strain);
     }
 
     @Override
