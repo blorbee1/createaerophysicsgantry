@@ -1,5 +1,5 @@
 ## About
-Create Aeronautics Physics Gantry does one simple job, adds a physics gantry to Create Aeronautics. The physics gantry an alterantive gantry type that uses a Simulated Contraption instead of a Create Contraption when moving
+Create Aeronautics Physics Gantry does one simple job, adds a physics gantry to Create Aeronautics. The physics gantry an alternative gantry type that uses a Simulated Contraption instead of a Create Contraption when moving
 
 Highly recommended to have [JEI](https://modrinth.com/mod/jei) or some alternative installed with this mod to view recipes and pondering.
 
@@ -15,7 +15,8 @@ This runs on [NeoForge](https://neoforged.net/) only, its dependencies are liste
 **Supported Create versions:**
 | Create | Create Aeronautics | CAPG |
 | :--- | :--- | :--- |
-| 6.0.9+ | 1.3.0+ | 1.2.0 - latest |
+| 6.0.9+ | 1.3.0+ | 1.2.1 - latest |
+| 6.0.9+ | 1.3.0+ | 1.2.x|
 | 6.0.9+ | 1.3.0+ | 1.1.x |
 | 6.0.9+ | 1.3.0+ | 1.0.x |
 | 6.0.9+ | 1.2.1 | 1.0.0-1.0.1 |
