@@ -466,8 +466,7 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
             return;
 
         double maxForce = PULL_ACCEL * effectiveMass;
-        double sign = distance >= restLength ? 1 : -1;
-        double spring = sign * maxForce * strain * strain;
+        double spring = maxForce * strain * strain;
 
         Vector3d vA = ownSub instanceof ServerSubLevel s ? pipeline.getLinearVelocity(s, new Vector3d()) : new Vector3d();
         Vector3d vB = otherSub instanceof ServerSubLevel s ? pipeline.getLinearVelocity(s, new Vector3d()) : new Vector3d();
@@ -519,7 +518,7 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
         if (restLength >= 0) {
             double len = Math.sqrt(lenSqr);
             double tolerance = stretchTolerance(restLength);
-            if (len > restLength + tolerance || len < restLength - tolerance)
+            if (len > restLength + tolerance)
                 return Geometry.LENGTH;
         }
         return Geometry.OK;
@@ -531,13 +530,11 @@ public class BeltWheelBlockEntity extends GeneratingKineticBlockEntity {
 
     // 0 = relaxes, 1 = at the break limit
     public float getStrain(double distance) {
-        if (restLength < 0)
+        if (restLength < 0 || distance <= restLength)
             return 0f;
         double tolerance = stretchTolerance(restLength);
-        double limit = distance >= restLength
-            ? Math.clamp(BeltWheelBlock.getConfiguredMaxDistance() - restLength, 0.1, tolerance)
-            : Math.clamp(restLength - 0.1, 0.1, tolerance);
-        double t = Math.abs(distance - restLength) / limit;
+        double limit = Math.clamp(BeltWheelBlock.getConfiguredMaxDistance() - restLength, 0.1, tolerance);
+        double t = (distance - restLength) / limit;
         return (float) Math.clamp((t - STRAIN_START) / (1.0 - STRAIN_START), 0, 1);
     }
 
